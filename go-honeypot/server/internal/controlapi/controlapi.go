@@ -26,19 +26,54 @@ import (
 
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/geoip"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/manager"
 )
 
 type SyncFunc func(cfg config.Config)
 
+// BuildInfo is what the daemon knows about itself. The dashboard compares
+// Commit against the latest GitHub release to offer an update.
+type BuildInfo struct {
+	Version   string `json:"version"`
+	Commit    string `json:"commit"`
+	GoVersion string `json:"goVersion"`
+	OS        string `json:"os"`
+	Arch      string `json:"arch"`
+	StartedAt int64  `json:"startedAt"`
+	Repo      string `json:"repo,omitempty"`
+	Binary    string `json:"binary,omitempty"`
+	Services  int    `json:"services"`
+}
+
 type Server struct {
 	store   *eventlog.Store
 	manager *manager.Manager
 	sync    SyncFunc
+	geo     GeoLookup
+	build   BuildInfo
 
 	authKey string
 	http    *http.Server
 	origins []string
+}
+
+// GeoLookup is the subset of internal/geoip the API needs.
+type GeoLookup interface {
+	Batch(ips []string) map[string]geoip.Location
+	Stats() geoip.Stats
+}
+
+// SetGeo makes country data available over the API.
+func (s *Server) SetGeo(g GeoLookup) { s.geo = g }
+
+// SetBuildInfo records what this binary is, for the version check.
+func (s *Server) SetBuildInfo(info BuildInfo) { s.build = info }
+
+func (s *Server) buildInfo() BuildInfo {
+	info := s.build
+	info.Services = len(s.manager.List())
+	return info
 }
 
 type Message struct {
@@ -85,6 +120,8 @@ func (s *Server) Start(ctx context.Context, cfg config.Control, authKey string) 
 	mux.HandleFunc("/v1/stats", s.withAuth(s.restStats))
 	mux.HandleFunc("/v1/services", s.withAuth(s.restServices))
 	mux.HandleFunc("/v1/config", s.withAuth(s.restConfig))
+	mux.HandleFunc("/v1/geo", s.withAuth(s.restGeo))
+	mux.HandleFunc("/v1/version", s.withAuth(s.restVersion))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("honeypot control-plane is up.\nWebSocket: ws://" + r.Host + "/api?token=<AUTH_KEY>\nREST: /v1/* with Authorization: Bearer <AUTH_KEY>\n"))
@@ -201,6 +238,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		"services": s.manager.List(),
 		"stats":    s.store.Stats(),
 		"events":   s.store.Events(eventlog.EventFilter{Limit: 200}),
+		"build":    s.buildInfo(),
+		"geo":      s.geoStats(),
 	})}); err != nil {
 		return
 	}
@@ -274,14 +313,11 @@ func (s *Server) handleCommand(c *client, msg Message) {
 		}
 		reply(s.store.Events(filter))
 	case "get_sessions":
-		var req struct {
-			Service string `json:"service"`
-			Limit   int    `json:"limit"`
-		}
+		var req sessionRequest
 		if len(msg.Payload) > 0 {
 			_ = json.Unmarshal(msg.Payload, &req)
 		}
-		reply(s.store.Sessions(req.Service, req.Limit))
+		reply(s.store.Sessions(req.filter()))
 	case "get_session":
 		var req struct {
 			ID string `json:"id"`
@@ -299,6 +335,16 @@ func (s *Server) handleCommand(c *client, msg Message) {
 	case "get_range":
 		oldest, newest := s.store.Range()
 		reply(map[string]any{"oldest": oldest, "newest": newest})
+	case "geo_lookup":
+		var req struct {
+			IPs []string `json:"ips"`
+		}
+		if len(msg.Payload) > 0 {
+			_ = json.Unmarshal(msg.Payload, &req)
+		}
+		reply(map[string]any{"locations": s.geoBatch(req.IPs), "geo": s.geoStats()})
+	case "get_version":
+		reply(s.buildInfo())
 	case "ping":
 		reply(map[string]any{"pong": time.Now().UnixMilli()})
 	default:
@@ -342,4 +388,60 @@ func corsMiddleware(next http.Handler, allowed []string) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// sessionRequest is the wire shape of the session filter, shared by the
+// WebSocket action and the REST endpoint.
+type sessionRequest struct {
+	Service     string `json:"service"`
+	IP          string `json:"ip"`
+	Username    string `json:"username"`
+	CountryCode string `json:"country"`
+	Status      string `json:"status"`
+	MinCommands int    `json:"minCommands"`
+	Since       int64  `json:"since"`
+	Until       int64  `json:"until"`
+	Search      string `json:"q"`
+	Sort        string `json:"sort"`
+	Limit       int    `json:"limit"`
+}
+
+func (r sessionRequest) filter() eventlog.SessionFilter {
+	limit := r.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	return eventlog.SessionFilter{
+		Service:     r.Service,
+		IP:          r.IP,
+		Username:    r.Username,
+		CountryCode: r.CountryCode,
+		Status:      r.Status,
+		MinCommands: r.MinCommands,
+		Since:       r.Since,
+		Until:       r.Until,
+		Search:      r.Search,
+		Sort:        r.Sort,
+		Limit:       limit,
+	}
+}
+
+func (s *Server) geoBatch(ips []string) map[string]geoip.Location {
+	if s.geo == nil || len(ips) == 0 {
+		return map[string]geoip.Location{}
+	}
+	if len(ips) > 2000 {
+		ips = ips[:2000]
+	}
+	return s.geo.Batch(ips)
+}
+
+func (s *Server) geoStats() any {
+	if s.geo == nil {
+		return map[string]any{"enabled": false}
+	}
+	return s.geo.Stats()
 }

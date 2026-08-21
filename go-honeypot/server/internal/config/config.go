@@ -23,6 +23,18 @@ type Storage struct {
 	HostKeyFile string `json:"hostKeyFile"`
 }
 
+// GeoIP controls country lookups for attacker IPs. Lookups go to a public
+// HTTP service, so disabling this keeps every address on the box.
+type GeoIP struct {
+	Enabled         bool   `json:"enabled"`
+	Provider        string `json:"provider,omitempty"` // ipwho.is | ip-api | ipinfo
+	URL             string `json:"url,omitempty"`      // overrides provider; {ip} placeholder
+	CacheFile       string `json:"cacheFile,omitempty"`
+	TTLHours        int    `json:"ttlHours,omitempty"`
+	TimeoutMs       int    `json:"timeoutMs,omitempty"`
+	RateLimitPerMin int    `json:"rateLimitPerMin,omitempty"`
+}
+
 type SshFakeAuth struct {
 	Mode                  string   `json:"mode"`
 	AcceptProbability     float64  `json:"acceptProbability"`
@@ -38,24 +50,25 @@ type SshShell struct {
 }
 
 type Service struct {
-	Enabled         bool         `json:"enabled"`
-	Port            int          `json:"port"`
-	Protocol        string       `json:"protocol,omitempty"` // tcp (default) or udp
-	Kind            string       `json:"kind,omitempty"`     // built-in name or generic/echo
-	Banner          string       `json:"banner,omitempty"`
-	Hostname        string       `json:"hostname,omitempty"`
-	FakeAuth        *SshFakeAuth `json:"fakeAuth,omitempty"`
-	Shell           *SshShell    `json:"shell,omitempty"`
-	ServerHeader    string       `json:"serverHeader,omitempty"`
-	LoginPagePath   string       `json:"loginPagePath,omitempty"`
-	ServerVersion   string       `json:"serverVersion,omitempty"`
-	IdleTimeoutSec  int          `json:"idleTimeoutSec,omitempty"`
-	CaptureBytes    int          `json:"captureBytes,omitempty"`
+	Enabled        bool         `json:"enabled"`
+	Port           int          `json:"port"`
+	Protocol       string       `json:"protocol,omitempty"` // tcp (default) or udp
+	Kind           string       `json:"kind,omitempty"`     // built-in name or generic/echo
+	Banner         string       `json:"banner,omitempty"`
+	Hostname       string       `json:"hostname,omitempty"`
+	FakeAuth       *SshFakeAuth `json:"fakeAuth,omitempty"`
+	Shell          *SshShell    `json:"shell,omitempty"`
+	ServerHeader   string       `json:"serverHeader,omitempty"`
+	LoginPagePath  string       `json:"loginPagePath,omitempty"`
+	ServerVersion  string       `json:"serverVersion,omitempty"`
+	IdleTimeoutSec int          `json:"idleTimeoutSec,omitempty"`
+	CaptureBytes   int          `json:"captureBytes,omitempty"`
 }
 
 type Config struct {
 	Control  Control            `json:"control"`
 	Storage  Storage            `json:"storage"`
+	GeoIP    *GeoIP             `json:"geoip,omitempty"`
 	Services map[string]Service `json:"services"`
 }
 
@@ -130,6 +143,15 @@ func writeJSON(path string, c Config) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
+// Geo returns the geoip block with defaults filled in, so callers never
+// have to nil-check it.
+func (c Config) Geo() GeoIP {
+	if c.GeoIP == nil {
+		return GeoIP{Enabled: false}
+	}
+	return *c.GeoIP
+}
+
 func merge(base, override Config) Config {
 	out := base
 	if override.Control.Host != "" {
@@ -152,6 +174,9 @@ func merge(base, override Config) Config {
 	}
 	if override.Storage.HostKeyFile != "" {
 		out.Storage.HostKeyFile = override.Storage.HostKeyFile
+	}
+	if override.GeoIP != nil {
+		out.GeoIP = override.GeoIP
 	}
 	if override.Services != nil {
 		if out.Services == nil {

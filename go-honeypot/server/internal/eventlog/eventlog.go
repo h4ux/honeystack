@@ -31,6 +31,11 @@ type Event struct {
 	Command    string         `json:"command,omitempty"`
 	SessionID  string         `json:"sessionId,omitempty"`
 	Details    map[string]any `json:"details,omitempty"`
+	// Geo fields are filled from the geoip cache — at log time when the IP
+	// is already known, otherwise on the way out to a client.
+	Country     string `json:"country,omitempty"`
+	CountryCode string `json:"countryCode,omitempty"`
+	Org         string `json:"org,omitempty"`
 }
 
 type Session struct {
@@ -42,6 +47,9 @@ type Session struct {
 	OpenedAt     int64   `json:"openedAt"`
 	ClosedAt     int64   `json:"closedAt,omitempty"`
 	CommandCount int     `json:"commandCount"`
+	Country      string  `json:"country,omitempty"`
+	CountryCode  string  `json:"countryCode,omitempty"`
+	Org          string  `json:"org,omitempty"`
 	Events       []Event `json:"events,omitempty"`
 }
 
@@ -76,15 +84,16 @@ type Stats struct {
 	Daily    []Bucket `json:"daily"`
 	Heatmap  Heatmap  `json:"heatmap"`
 
-	TopIPs       []KV          `json:"topIps"`
-	TopCreds     []CredCount   `json:"topCreds"`
-	TopCommands  []KV          `json:"topCommands"`
-	TopUsernames []KV          `json:"topUsernames"`
-	TopPasswords []KV          `json:"topPasswords"`
-	TopPorts     []KV          `json:"topPorts"`
-	TopPaths     []KV          `json:"topPaths"`
-	TopClients   []KV          `json:"topClients"`
-	Services     []ServiceStat `json:"serviceStats"`
+	TopIPs       []KV           `json:"topIps"`
+	TopCountries []CountryCount `json:"topCountries"`
+	TopCreds     []CredCount    `json:"topCreds"`
+	TopCommands  []KV           `json:"topCommands"`
+	TopUsernames []KV           `json:"topUsernames"`
+	TopPasswords []KV           `json:"topPasswords"`
+	TopPorts     []KV           `json:"topPorts"`
+	TopPaths     []KV           `json:"topPaths"`
+	TopClients   []KV           `json:"topClients"`
+	Services     []ServiceStat  `json:"serviceStats"`
 }
 
 // Bucket is one slot of a time series.
@@ -102,6 +111,14 @@ type Bucket struct {
 type Heatmap struct {
 	Max  int   `json:"max"`
 	Grid []int `json:"grid"`
+}
+
+// CountryCount is one row of the geo breakdown.
+type CountryCount struct {
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	Count     int    `json:"count"`
+	UniqueIPs int    `json:"uniqueIps"`
 }
 
 // ServiceStat is the per-listener breakdown behind the service table.
@@ -129,6 +146,14 @@ type CredCount struct {
 
 type Subscriber func(Event)
 
+// Geo resolves an IP to a country. It is satisfied by internal/geoip and
+// kept as an interface so the event log has no opinion about where country
+// data comes from (or whether it exists at all).
+type Geo interface {
+	Annotate(ip string) (country, code, org string, ok bool)
+	Queue(ip string)
+}
+
 type Store struct {
 	mu       sync.RWMutex
 	events   []Event
@@ -144,6 +169,51 @@ type Store struct {
 	subs   map[uint64]Subscriber
 	subSeq uint64
 	subMu  sync.RWMutex
+
+	geoMu sync.RWMutex
+	geo   Geo
+}
+
+// SetGeo attaches (or clears) the country resolver.
+func (s *Store) SetGeo(g Geo) {
+	s.geoMu.Lock()
+	s.geo = g
+	s.geoMu.Unlock()
+}
+
+func (s *Store) geoResolver() Geo {
+	s.geoMu.RLock()
+	defer s.geoMu.RUnlock()
+	return s.geo
+}
+
+// annotate fills the geo fields of one event from the cache. Events are
+// annotated on the way out as well as at log time, so an IP that was
+// unknown when it first hit still shows a country once the lookup lands.
+func (s *Store) annotate(e *Event) {
+	if e.RemoteIP == "" || e.CountryCode != "" || e.Country != "" {
+		return
+	}
+	g := s.geoResolver()
+	if g == nil {
+		return
+	}
+	if country, code, org, ok := g.Annotate(e.RemoteIP); ok {
+		e.Country, e.CountryCode, e.Org = country, code, org
+	}
+}
+
+func (s *Store) annotateSession(sess *Session) {
+	if sess.RemoteIP == "" || sess.CountryCode != "" || sess.Country != "" {
+		return
+	}
+	g := s.geoResolver()
+	if g == nil {
+		return
+	}
+	if country, code, org, ok := g.Annotate(sess.RemoteIP); ok {
+		sess.Country, sess.CountryCode, sess.Org = country, code, org
+	}
 }
 
 func New(logPath string, maxRows int) (*Store, error) {
@@ -281,6 +351,16 @@ func (s *Store) Log(e Event) Event {
 	if e.TS == 0 {
 		e.TS = time.Now().UnixMilli()
 	}
+	if e.RemoteIP != "" {
+		if g := s.geoResolver(); g != nil {
+			s.annotate(&e)
+			if e.CountryCode == "" {
+				// Not cached yet: ask in the background so the next event
+				// (and every read path) has it.
+				g.Queue(e.RemoteIP)
+			}
+		}
+	}
 	s.mu.Lock()
 	s.nextID++
 	e.ID = s.nextID
@@ -326,23 +406,101 @@ func (s *Store) SetSessionUsername(id, username string) {
 	s.mu.Unlock()
 }
 
-func (s *Store) Sessions(service string, limit int) []Session {
+// SessionFilter narrows the session list. Every field is optional.
+type SessionFilter struct {
+	Service     string
+	IP          string
+	Username    string
+	CountryCode string
+	Status      string // active | closed | "" (both)
+	MinCommands int
+	Since       int64
+	Until       int64
+	Search      string // matches id, ip, username, service, country, org
+	Sort        string // recent | oldest | commands | duration
+	Limit       int
+}
+
+func (s *Store) Sessions(filter SessionFilter) []Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	needle := strings.ToLower(filter.Search)
 	out := make([]Session, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		if service != "" && sess.Service != service {
+		item := *sess
+		item.Events = nil
+		s.annotateSession(&item)
+		if !sessionMatches(item, filter, needle) {
 			continue
 		}
-		copy := *sess
-		copy.Events = nil
-		out = append(out, copy)
+		out = append(out, item)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].OpenedAt > out[j].OpenedAt })
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
+	switch filter.Sort {
+	case "oldest":
+		sort.Slice(out, func(i, j int) bool { return out[i].OpenedAt < out[j].OpenedAt })
+	case "commands":
+		sort.Slice(out, func(i, j int) bool { return out[i].CommandCount > out[j].CommandCount })
+	case "duration":
+		sort.Slice(out, func(i, j int) bool { return sessionDuration(out[i]) > sessionDuration(out[j]) })
+	default:
+		sort.Slice(out, func(i, j int) bool { return out[i].OpenedAt > out[j].OpenedAt })
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
 	}
 	return out
+}
+
+func sessionDuration(sess Session) int64 {
+	end := sess.ClosedAt
+	if end == 0 {
+		end = time.Now().UnixMilli()
+	}
+	return end - sess.OpenedAt
+}
+
+func sessionMatches(sess Session, f SessionFilter, needle string) bool {
+	if f.Service != "" && sess.Service != f.Service {
+		return false
+	}
+	if f.IP != "" && sess.RemoteIP != f.IP {
+		return false
+	}
+	if f.Username != "" && !strings.EqualFold(sess.Username, f.Username) {
+		return false
+	}
+	if f.CountryCode != "" && !strings.EqualFold(sess.CountryCode, f.CountryCode) {
+		return false
+	}
+	switch strings.ToLower(f.Status) {
+	case "active":
+		if sess.ClosedAt != 0 {
+			return false
+		}
+	case "closed":
+		if sess.ClosedAt == 0 {
+			return false
+		}
+	}
+	if f.MinCommands > 0 && sess.CommandCount < f.MinCommands {
+		return false
+	}
+	if f.Since > 0 && sess.OpenedAt < f.Since {
+		return false
+	}
+	if f.Until > 0 && sess.OpenedAt > f.Until {
+		return false
+	}
+	if needle != "" {
+		hay := strings.ToLower(strings.Join([]string{
+			sess.ID, sess.Service, sess.RemoteIP, sess.Username,
+			sess.Country, sess.CountryCode, sess.Org,
+		}, " "))
+		if !strings.Contains(hay, needle) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) Session(id string) (Session, bool) {
@@ -354,11 +512,13 @@ func (s *Store) Session(id string) (Session, bool) {
 	}
 	copy := *sess
 	s.mu.RUnlock()
+	s.annotateSession(&copy)
 
 	s.mu.RLock()
 	evts := make([]Event, 0, 32)
 	for _, e := range s.events {
 		if e.SessionID == id {
+			s.annotate(&e)
 			evts = append(evts, e)
 		}
 	}
@@ -414,6 +574,7 @@ func (s *Store) Events(f EventFilter) []Event {
 		if needle != "" && !eventMatches(e, needle) {
 			continue
 		}
+		s.annotate(&e)
 		out = append(out, e)
 	}
 	// reverse
@@ -507,6 +668,27 @@ func (s *Store) Stats() Stats {
 	seenIPs24 := map[string]struct{}{}
 	svcAggs := map[string]*serviceAgg{}
 
+	// Resolve each distinct IP once per call instead of per event.
+	geo := s.geoResolver()
+	type geoEntry struct{ code, name string }
+	geoMemo := map[string]geoEntry{}
+	countryCount := map[string]int{}
+	countryName := map[string]string{}
+	countryIPs := map[string]map[string]struct{}{}
+	lookupGeo := func(ip string) geoEntry {
+		if entry, ok := geoMemo[ip]; ok {
+			return entry
+		}
+		entry := geoEntry{}
+		if geo != nil {
+			if name, code, _, ok := geo.Annotate(ip); ok {
+				entry = geoEntry{code: code, name: name}
+			}
+		}
+		geoMemo[ip] = entry
+		return entry
+	}
+
 	// 24 hourly buckets, chronological, ending with the hour in progress.
 	firstHour := now.UTC().Truncate(time.Hour).Add(-23 * time.Hour)
 	timeline := make([]Bucket, 24)
@@ -582,6 +764,25 @@ func (s *Store) Stats() Stats {
 		if e.RemoteIP != "" {
 			ipCount[e.RemoteIP]++
 			seenIPs[e.RemoteIP] = struct{}{}
+			entry := lookupGeo(e.RemoteIP)
+			if e.CountryCode != "" {
+				// The event was annotated when it was logged.
+				entry = geoEntry{code: e.CountryCode, name: e.Country}
+			}
+			if entry.code != "" || entry.name != "" {
+				key := entry.code
+				if key == "" {
+					key = entry.name
+				}
+				countryCount[key]++
+				if entry.name != "" {
+					countryName[key] = entry.name
+				}
+				if countryIPs[key] == nil {
+					countryIPs[key] = map[string]struct{}{}
+				}
+				countryIPs[key][e.RemoteIP] = struct{}{}
+			}
 		}
 		if e.LocalPort > 0 {
 			portCount[fmt.Sprintf("%d/%s", e.LocalPort, e.Service)]++
@@ -715,6 +916,14 @@ func (s *Store) Stats() Stats {
 	stats.ByService = topK(svcCount, 20)
 	stats.ByType = topK(typeCount, 20)
 	stats.TopIPs = topK(ipCount, 15)
+	for _, kv := range topK(countryCount, 20) {
+		stats.TopCountries = append(stats.TopCountries, CountryCount{
+			Code:      kv.Key,
+			Name:      countryName[kv.Key],
+			Count:     kv.Count,
+			UniqueIPs: len(countryIPs[kv.Key]),
+		})
+	}
 	stats.TopCommands = topK(cmdCount, 15)
 	stats.TopUsernames = topK(userCount, 10)
 	stats.TopPasswords = topK(passCount, 10)

@@ -60,6 +60,8 @@ func (s *Server) restHello(w http.ResponseWriter, r *http.Request) {
 		"services": s.manager.List(),
 		"stats":    s.store.Stats(),
 		"events":   s.store.Events(eventlog.EventFilter{Limit: 200}),
+		"build":    s.buildInfo(),
+		"geo":      s.geoStats(),
 	})
 }
 
@@ -84,8 +86,44 @@ func (s *Server) restRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) restSessions(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	writeJSON(w, http.StatusOK, s.store.Sessions(r.URL.Query().Get("service"), limit))
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	minCmds, _ := strconv.Atoi(q.Get("minCommands"))
+	since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
+	until, _ := strconv.ParseInt(q.Get("until"), 10, 64)
+	req := sessionRequest{
+		Service:     q.Get("service"),
+		IP:          q.Get("ip"),
+		Username:    q.Get("username"),
+		CountryCode: q.Get("country"),
+		Status:      q.Get("status"),
+		MinCommands: minCmds,
+		Since:       since,
+		Until:       until,
+		Search:      q.Get("q"),
+		Sort:        q.Get("sort"),
+		Limit:       limit,
+	}
+	writeJSON(w, http.StatusOK, s.store.Sessions(req.filter()))
+}
+
+// restGeo resolves a batch of IPs: /v1/geo?ips=1.2.3.4,5.6.7.8
+func (s *Server) restGeo(w http.ResponseWriter, r *http.Request) {
+	raw := r.URL.Query().Get("ips")
+	var ips []string
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			ips = append(ips, p)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"locations": s.geoBatch(ips),
+		"geo":       s.geoStats(),
+	})
+}
+
+func (s *Server) restVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.buildInfo())
 }
 
 func (s *Server) restSession(w http.ResponseWriter, r *http.Request) {

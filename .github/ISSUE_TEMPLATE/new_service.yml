@@ -1,0 +1,51 @@
+name: 🎣 New honeypot service
+description: Propose (or claim) a protocol to emulate
+labels: ["enhancement", "new-service"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adding a service is a well-trodden path — see the step-by-step in
+        [CONTRIBUTING.md](https://github.com/h4ux/honeystack/blob/main/CONTRIBUTING.md#adding-a-honeypot-service).
+  - type: input
+    id: protocol
+    attributes:
+      label: Protocol / product
+      placeholder: Jenkins remoting, Cassandra CQL, Zookeeper, WinRM…
+    validations:
+      required: true
+  - type: input
+    id: port
+    attributes:
+      label: Default port(s) and transport
+      placeholder: 9042/tcp
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: What would it capture that we do not already log
+      description: Credentials? A command? An amplification attempt? Who scans it, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: handshake
+    attributes:
+      label: Minimum handshake to look real
+      description: |
+        The bytes a scanner sends first and what a real server answers.
+        Link a spec or a packet capture if you have one.
+      render: text
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: The emulator can answer without forwarding, relaying, executing or amplifying anything
+          required: true
+  - type: checkboxes
+    id: claim
+    attributes:
+      label: Are you planning to implement it?
+      options:
+        - label: I would like to send the PR myself

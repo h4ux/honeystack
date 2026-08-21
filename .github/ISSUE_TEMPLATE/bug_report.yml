@@ -1,0 +1,77 @@
+name: 🐞 Bug report
+description: Something in the daemon, dashboard or scripts behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Not for security issues.** Report those privately — see
+        [SECURITY.md](https://github.com/h4ux/honeystack/blob/main/SECURITY.md).
+
+        Remember that a honeypot accepting fake logins, showing a fake shell,
+        or having open decoy ports is intended behaviour.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Go daemon (a honeypot service / emulator)
+        - Go daemon (control API, config, event log, geoip)
+        - Dashboard (webapp)
+        - Deploy or update script
+        - CI / release artefacts
+        - Node.js edition
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Build
+      description: Output of `honeypot --version` (or the commit you built).
+      placeholder: honeypot nightly (commit e16c23d, go1.26.7, linux/amd64, repo=h4ux/honeystack)
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: Ubuntu 24.04 / arm64, or "macOS 15, Chrome 151" for a dashboard bug
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected instead, and what you actually got.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        For a protocol bug, the bytes matter. A `nc`/`python` snippet or a
+        hexdump of what you sent makes this reproducible in minutes.
+      placeholder: |
+        printf 'EHLO x\r\nAUTH LOGIN\r\n' | nc <host> 25
+        → daemon replies …, expected …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        From `journalctl -u honeypot-go`, the matching line from
+        `events.ndjson`, or the browser console. Redact anything that
+        identifies a third party.
+      render: text
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I reproduced this on the current `nightly` build
+          required: true
+        - label: This is not a security vulnerability (those go to a private advisory)
+          required: true

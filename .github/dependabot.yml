@@ -1,0 +1,37 @@
+# Keep dependencies current so a critical advisory does not sit for weeks.
+# The Go module is vendored, so Dependabot updates go.mod, go.sum *and*
+# vendor/ in the same PR.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /go-honeypot/server
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels: ["dependencies", "go"]
+    groups:
+      golang-x:
+        patterns: ["golang.org/x/*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels: ["dependencies", "node"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels: ["dependencies", "ci"]

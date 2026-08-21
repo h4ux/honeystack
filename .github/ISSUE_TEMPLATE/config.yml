@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/h4ux/honeystack/security/advisories/new
+    about: Never report security issues publicly. Use a private advisory (see SECURITY.md).
+  - name: 💬 Deployment help / questions
+    url: https://github.com/h4ux/honeystack/blob/main/SUPPORT.md
+    about: Auth key, port conflicts, TLS, firewall, "nothing is being logged".
+  - name: 📖 Service reference and config
+    url: https://github.com/h4ux/honeystack/blob/main/go-honeypot/README.md
+    about: What each of the 41 listeners captures, and every config field.

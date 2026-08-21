@@ -1,0 +1,150 @@
+# Fast checks on every push and PR: formatting, vet, race tests, the
+# dashboard's syntax, and the shell scripts. The release build lives in
+# go-honeypot.yml.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go (${{ matrix.job }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [vet, test]
+    defaults:
+      run:
+        working-directory: go-honeypot/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.7"
+          cache-dependency-path: go-honeypot/server/go.sum
+
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          # vendor/ is upstream code: only our own tree has to be formatted.
+          unformatted="$(gofmt -l . | grep -v '^vendor/' || true)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"; echo "$unformatted"
+            gofmt -d $(echo "$unformatted")
+            exit 1
+          fi
+
+      - name: go vet
+        if: matrix.job == 'vet'
+        run: go vet -mod=vendor ./...
+
+      - name: build
+        if: matrix.job == 'vet'
+        run: go build -mod=vendor ./...
+
+      - name: go test (race)
+        if: matrix.job == 'test'
+        run: go test -race -mod=vendor ./...
+
+      - name: vendor is in sync
+        if: matrix.job == 'test'
+        run: |
+          set -euo pipefail
+          go mod verify
+          cp -r vendor /tmp/vendor-before
+          go mod vendor
+          if ! diff -rq /tmp/vendor-before vendor >/dev/null; then
+            echo "vendor/ is out of date — run 'go mod vendor' and commit the result"
+            diff -rq /tmp/vendor-before vendor | head -20
+            exit 1
+          fi
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.7"
+          cache-dependency-path: go-honeypot/server/go.sum
+      - name: scan
+        working-directory: go-honeypot/server
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  webapp:
+    name: webapp + node edition
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: dashboard syntax
+        working-directory: go-honeypot/webapp
+        run: |
+          set -euo pipefail
+          for f in app.js charts.js icons.js pdf.js serve.js api/proxy.js; do
+            echo "checking $f"; node --check "$f"
+          done
+
+      - name: node honeypot syntax
+        run: |
+          set -euo pipefail
+          find src public -name '*.js' -print -exec node --check {} \;
+
+      - name: config files are valid JSON
+        run: |
+          set -euo pipefail
+          for f in config.default.json go-honeypot/server/config.default.json go-honeypot/webapp/vercel.json; do
+            echo "checking $f"; node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))"
+          done
+
+      - name: every service in the default config resolves to a factory and an icon
+        run: |
+          node - <<'JS'
+          const fs = require('fs');
+          const cfg = JSON.parse(fs.readFileSync('go-honeypot/server/config.default.json', 'utf8'));
+          const main = fs.readFileSync('go-honeypot/server/main.go', 'utf8');
+          const icons = fs.readFileSync('go-honeypot/webapp/icons.js', 'utf8');
+          let bad = 0;
+          for (const name of Object.keys(cfg.services)) {
+            if (!main.includes(`m.Register("${name}"`)) {
+              console.log(`no factory registered for service "${name}"`); bad = 1;
+            }
+            if (!new RegExp(`(^|[\\s{,])'?"?${name.replace(/[-]/g, '-')}'?"?\\s*:`, 'm').test(icons)) {
+              console.log(`no icon mapping for service "${name}" in webapp/icons.js`); bad = 1;
+            }
+          }
+          console.log(`${Object.keys(cfg.services).length} services checked`);
+          process.exit(bad);
+          JS
+
+  scripts:
+    name: shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n
+        run: |
+          set -euo pipefail
+          find . -name '*.sh' -not -path './go-honeypot/server/vendor/*' -print -exec bash -n {} \;
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # Style nags are advisory; anything error-level fails the build.
+          shellcheck -S error $(find . -name '*.sh' -not -path './go-honeypot/server/vendor/*')

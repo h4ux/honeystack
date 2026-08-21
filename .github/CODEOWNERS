@@ -1,0 +1,8 @@
+# Default owner for everything in this repo.
+*                       @h4ux
+
+# The pieces that touch a live server or publish artefacts deserve a look
+# from the maintainer even when the rest is delegated.
+/go-honeypot/scripts/   @h4ux
+/.github/workflows/     @h4ux
+/SECURITY.md            @h4ux

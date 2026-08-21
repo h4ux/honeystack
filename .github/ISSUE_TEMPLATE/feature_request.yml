@@ -1,0 +1,34 @@
+name: ✨ Feature request
+description: Suggest an improvement to the daemon, dashboard or tooling
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing today
+      description: The operational problem, not the solution. What can you not see or do?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: How you picture it working — a field, a filter, a chart, a flag.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Honeypot emulation
+        - Dashboard / reporting
+        - Deployment / operations
+        - API
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you have tried

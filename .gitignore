@@ -5,3 +5,4 @@ config.json
 .DS_Store
 ssh_traffic.js
 .cursor/
+honeypot.zip

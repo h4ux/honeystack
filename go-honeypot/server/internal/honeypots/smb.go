@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"net"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 func NewSMB(cfg config.Service, store *eventlog.Store) *TCP {

@@ -13,6 +13,8 @@ type Control struct {
 	Port           int      `json:"port"`
 	AuthKeyFile    string   `json:"authKeyFile"`
 	AllowedOrigins []string `json:"allowedOrigins"`
+	TLSCertFile    string   `json:"tlsCertFile,omitempty"`
+	TLSKeyFile     string   `json:"tlsKeyFile,omitempty"`
 }
 
 type Storage struct {
@@ -36,15 +38,19 @@ type SshShell struct {
 }
 
 type Service struct {
-	Enabled       bool         `json:"enabled"`
-	Port          int          `json:"port"`
-	Banner        string       `json:"banner,omitempty"`
-	Hostname      string       `json:"hostname,omitempty"`
-	FakeAuth      *SshFakeAuth `json:"fakeAuth,omitempty"`
-	Shell         *SshShell    `json:"shell,omitempty"`
-	ServerHeader  string       `json:"serverHeader,omitempty"`
-	LoginPagePath string       `json:"loginPagePath,omitempty"`
-	ServerVersion string       `json:"serverVersion,omitempty"`
+	Enabled         bool         `json:"enabled"`
+	Port            int          `json:"port"`
+	Protocol        string       `json:"protocol,omitempty"` // tcp (default) or udp
+	Kind            string       `json:"kind,omitempty"`     // built-in name or generic/echo
+	Banner          string       `json:"banner,omitempty"`
+	Hostname        string       `json:"hostname,omitempty"`
+	FakeAuth        *SshFakeAuth `json:"fakeAuth,omitempty"`
+	Shell           *SshShell    `json:"shell,omitempty"`
+	ServerHeader    string       `json:"serverHeader,omitempty"`
+	LoginPagePath   string       `json:"loginPagePath,omitempty"`
+	ServerVersion   string       `json:"serverVersion,omitempty"`
+	IdleTimeoutSec  int          `json:"idleTimeoutSec,omitempty"`
+	CaptureBytes    int          `json:"captureBytes,omitempty"`
 }
 
 type Config struct {

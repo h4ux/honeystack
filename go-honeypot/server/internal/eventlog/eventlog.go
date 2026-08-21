@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,6 +51,10 @@ type Stats struct {
 	UniqueIPs      int         `json:"uniqueIps"`
 	ActiveSessions int         `json:"activeSessions"`
 	ByService      []KV        `json:"byService"`
+	ByType         []KV        `json:"byType"`
+	Hourly         []KV        `json:"hourly"`
+	Accepted       int         `json:"accepted"`
+	Rejected       int         `json:"rejected"`
 	TopIPs         []KV        `json:"topIps"`
 	TopCreds       []CredCount `json:"topCreds"`
 	TopCommands    []KV        `json:"topCommands"`
@@ -104,8 +110,86 @@ func New(logPath string, maxRows int) (*Store, error) {
 		closeCh:  make(chan struct{}),
 		subs:     map[uint64]Subscriber{},
 	}
+	// Rehydrate from the NDJSON log so a dashboard that connects after a
+	// restart still sees history, not just events since the daemon booted.
+	if err := s.loadFromDisk(logPath, maxRows); err != nil {
+		log.Printf("[eventlog] could not replay %s: %v", logPath, err)
+	}
 	go s.flusher()
 	return s, nil
+}
+
+// loadFromDisk replays up to maxRows trailing records from the NDJSON log.
+func (s *Store) loadFromDisk(logPath string, maxRows int) error {
+	f, err := os.Open(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+
+	ring := make([]Event, 0, 4096)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var e Event
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		ring = append(ring, e)
+		if len(ring) > maxRows {
+			ring = ring[len(ring)-maxRows:]
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = ring
+	for _, e := range ring {
+		if e.ID > s.nextID {
+			s.nextID = e.ID
+		}
+		if e.SessionID == "" {
+			continue
+		}
+		sess, ok := s.sessions[e.SessionID]
+		if !ok {
+			sess = &Session{
+				ID: e.SessionID, Service: e.Service,
+				RemoteIP: e.RemoteIP, RemotePort: e.RemotePort,
+				OpenedAt: e.TS,
+			}
+			s.sessions[e.SessionID] = sess
+		}
+		if sess.Username == "" && e.Username != "" {
+			sess.Username = e.Username
+		}
+		if e.Type == "command" || e.Type == "exec" {
+			sess.CommandCount++
+		}
+		if e.Type == "connection_closed" && e.TS > sess.ClosedAt {
+			sess.ClosedAt = e.TS
+		}
+	}
+	// Anything still open from a previous process is not really live.
+	for _, sess := range s.sessions {
+		if sess.ClosedAt == 0 {
+			sess.ClosedAt = sess.OpenedAt
+		}
+	}
+	if n := len(ring); n > 0 {
+		log.Printf("[eventlog] replayed %d events from %s", n, logPath)
+	}
+	return nil
 }
 
 func (s *Store) flusher() {
@@ -233,6 +317,8 @@ type EventFilter struct {
 	IP        string
 	SessionID string
 	Since     int64
+	Until     int64
+	Search    string
 	Limit     int
 }
 
@@ -243,6 +329,10 @@ func (s *Store) Events(f EventFilter) []Event {
 	if limit <= 0 {
 		limit = 200
 	}
+	if limit > 20000 {
+		limit = 20000
+	}
+	needle := strings.ToLower(f.Search)
 	out := make([]Event, 0, limit)
 	// walk newest-first, collect up to limit, then reverse to time-ascending.
 	for i := len(s.events) - 1; i >= 0 && len(out) < limit; i-- {
@@ -262,6 +352,12 @@ func (s *Store) Events(f EventFilter) []Event {
 		if f.Since > 0 && e.TS < f.Since {
 			continue
 		}
+		if f.Until > 0 && e.TS > f.Until {
+			continue
+		}
+		if needle != "" && !eventMatches(e, needle) {
+			continue
+		}
 		out = append(out, e)
 	}
 	// reverse
@@ -271,12 +367,44 @@ func (s *Store) Events(f EventFilter) []Event {
 	return out
 }
 
+func eventMatches(e Event, needle string) bool {
+	if strings.Contains(strings.ToLower(e.Username), needle) ||
+		strings.Contains(strings.ToLower(e.Password), needle) ||
+		strings.Contains(strings.ToLower(e.Command), needle) ||
+		strings.Contains(strings.ToLower(e.RemoteIP), needle) ||
+		strings.Contains(strings.ToLower(e.Service), needle) ||
+		strings.Contains(strings.ToLower(e.Type), needle) {
+		return true
+	}
+	for k, v := range e.Details {
+		if strings.Contains(strings.ToLower(k), needle) {
+			return true
+		}
+		if sv, ok := v.(string); ok && strings.Contains(strings.ToLower(sv), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// Range reports the timestamp of the oldest and newest retained events.
+func (s *Store) Range() (int64, int64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.events) == 0 {
+		return 0, 0
+	}
+	return s.events[0].TS, s.events[len(s.events)-1].TS
+}
+
 func (s *Store) Stats() Stats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	cutoff := time.Now().Add(-24 * time.Hour).UnixMilli()
 	stats := Stats{Total: len(s.events)}
 	svcCount := map[string]int{}
+	typeCount := map[string]int{}
+	hourCount := map[string]int{}
 	ipCount := map[string]int{}
 	credCount := map[string]int{}
 	credInfo := map[string]CredCount{}
@@ -285,9 +413,20 @@ func (s *Store) Stats() Stats {
 	for _, e := range s.events {
 		if e.TS >= cutoff {
 			stats.Last24h++
+			hour := time.UnixMilli(e.TS).UTC().Format("15:00")
+			hourCount[hour]++
 		}
 		if e.Service != "" {
 			svcCount[e.Service]++
+		}
+		if e.Type != "" {
+			typeCount[e.Type]++
+		}
+		if e.Type == "auth_success" || e.Type == "authenticated" {
+			stats.Accepted++
+		}
+		if e.Type == "auth_attempt" || e.Type == "login_attempt" {
+			stats.Rejected++
 		}
 		if e.RemoteIP != "" {
 			ipCount[e.RemoteIP]++
@@ -309,6 +448,8 @@ func (s *Store) Stats() Stats {
 		}
 	}
 	stats.ByService = topK(svcCount, 20)
+	stats.ByType = topK(typeCount, 20)
+	stats.Hourly = topK(hourCount, 24)
 	stats.TopIPs = topK(ipCount, 10)
 	stats.TopCommands = topK(cmdCount, 15)
 	credList := make([]CredCount, 0, len(credInfo))

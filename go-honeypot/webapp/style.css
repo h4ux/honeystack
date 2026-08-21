@@ -135,8 +135,23 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,
 th { color: var(--muted); font-weight: 500; background: var(--panel-2); }
 td:last-child { text-align: right; color: var(--warn); }
 
+.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 20px; }
+.charts h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.4px; }
+.charts canvas { width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+.add-service { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.add-service label { color: var(--muted); font-size: 12px; }
+.add-service input, .add-service select { display: block; margin-top: 4px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 6px 8px; border-radius: 8px; font-family: var(--mono); }
+.session-list-header { display: flex; align-items: center; gap: 8px; }
+
+.table-scroll { max-height: calc(100vh - 260px); overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
+.table-scroll table { border: 0; border-radius: 0; }
+.table-scroll thead th { position: sticky; top: 0; z-index: 1; }
+#hist-table td { vertical-align: top; }
+#hist-table td:last-child { text-align: left; color: var(--text); overflow-wrap: anywhere; max-width: 520px; }
+#hist-summary { margin-bottom: 8px; }
+
 @media (max-width: 900px) {
   .split { grid-template-columns: 1fr; }
-  .two-col { grid-template-columns: 1fr; }
+  .two-col, .charts { grid-template-columns: 1fr; }
   .event { grid-template-columns: 70px 90px 110px 120px 1fr; }
 }

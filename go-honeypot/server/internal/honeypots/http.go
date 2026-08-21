@@ -1,7 +1,6 @@
 package honeypots
 
 import (
-	"context"
 	"errors"
 	"io"
 	"net"
@@ -10,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 type HTTP struct {
@@ -77,10 +76,21 @@ func (h *HTTP) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	isLogin := r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, loginPath)
 
+	h.store.OpenSession(eventlog.Session{
+		ID: sessionID, Service: "http", RemoteIP: remoteIP, RemotePort: remotePort,
+	})
+	defer h.store.CloseSession(sessionID)
+
 	username, password := parseAuthBody(body, r.Header.Get("Content-Type"))
+	if user, pass, ok := r.BasicAuth(); ok {
+		username, password = user, pass
+	}
 	eventType := "request"
-	if isLogin && username != "" {
-		eventType = "login_attempt"
+	accepted := false
+	if (isLogin || r.Header.Get("Authorization") != "") && username != "" {
+		accepted = shouldAccept(cfg.FakeAuth, username, password)
+		eventType = ternary(accepted, "auth_success", "login_attempt")
+		h.store.SetSessionUsername(sessionID, username)
 	}
 	h.store.Log(eventlog.Event{
 		Service: "http", Type: eventType, SessionID: sessionID,
@@ -88,10 +98,11 @@ func (h *HTTP) handle(w http.ResponseWriter, r *http.Request) {
 		Username: username, Password: password,
 		Command: r.Method + " " + r.URL.RequestURI(),
 		Details: map[string]any{
-			"method":  r.Method,
-			"url":     r.URL.RequestURI(),
-			"headers": flattenHeaders(r.Header),
-			"body":    string(body),
+			"method":   r.Method,
+			"url":      r.URL.RequestURI(),
+			"headers":  flattenHeaders(r.Header),
+			"body":     string(body),
+			"accepted": accepted,
 		},
 	})
 
@@ -107,8 +118,14 @@ func (h *HTTP) handle(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, renderHome())
 	case strings.HasPrefix(r.URL.Path, loginPath):
 		if isLogin {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = io.WriteString(w, renderLogin("Invalid credentials."))
+			if accepted {
+				w.Header().Set("Set-Cookie", "session="+sessionID+"; Path=/; HttpOnly")
+				_, _ = io.WriteString(w, `<!doctype html><html><head><title>Dashboard</title></head><body>
+<h1>Welcome `+username+`</h1><p>You are logged in.</p></body></html>`)
+			} else {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = io.WriteString(w, renderLogin("Invalid credentials."))
+			}
 		} else {
 			_, _ = io.WriteString(w, renderLogin(""))
 		}
@@ -124,7 +141,6 @@ func (h *HTTP) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, "<!doctype html><title>404 Not Found</title><h1>Not Found</h1>")
 	}
-	_ = context.TODO
 }
 
 func flattenHeaders(h http.Header) map[string]string {

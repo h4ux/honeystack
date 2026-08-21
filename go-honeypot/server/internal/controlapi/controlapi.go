@@ -24,9 +24,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
-	"github.com/example/honeypot/internal/manager"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/manager"
 )
 
 type SyncFunc func(cfg config.Config)
@@ -75,14 +75,19 @@ func (s *Server) Start(ctx context.Context, cfg config.Control, authKey string) 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api", s.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
-	// Convenience: unauthenticated banner so operators can visit the URL
-	// from a browser to confirm the service is running.
+	mux.HandleFunc("/v1/hello", s.withAuth(s.restHello))
+	mux.HandleFunc("/v1/events", s.withAuth(s.restEvents))
+	mux.HandleFunc("/v1/range", s.withAuth(s.restRange))
+	mux.HandleFunc("/v1/sessions", s.withAuth(s.restSessions))
+	mux.HandleFunc("/v1/session", s.withAuth(s.restSession))
+	mux.HandleFunc("/v1/stats", s.withAuth(s.restStats))
+	mux.HandleFunc("/v1/services", s.withAuth(s.restServices))
+	mux.HandleFunc("/v1/config", s.withAuth(s.restConfig))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("honeypot control-plane is up.\nconnect the webapp to ws://" + r.Host + "/api?token=<AUTH_KEY>\n"))
+		_, _ = w.Write([]byte("honeypot control-plane is up.\nWebSocket: ws://" + r.Host + "/api?token=<AUTH_KEY>\nREST: /v1/* with Authorization: Bearer <AUTH_KEY>\n"))
 	})
 
 	addr := cfg.Host
@@ -100,11 +105,18 @@ func (s *Server) Start(ctx context.Context, cfg config.Control, authKey string) 
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
-		if err := s.http.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			log.Printf("[controlapi] TLS listening on %s", addr)
+			err = s.http.ServeTLS(l, cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			log.Printf("[controlapi] listening on %s", addr)
+			err = s.http.Serve(l)
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("[controlapi] serve error: %v", err)
 		}
 	}()
-	log.Printf("[controlapi] listening on %s", addr)
 	return nil
 }
 
@@ -284,6 +296,9 @@ func (s *Server) handleCommand(c *client, msg Message) {
 			return
 		}
 		reply(sess)
+	case "get_range":
+		oldest, newest := s.store.Range()
+		reply(map[string]any{"oldest": oldest, "newest": newest})
 	case "ping":
 		reply(map[string]any{"pong": time.Now().UnixMilli()})
 	default:
@@ -318,7 +333,7 @@ func corsMiddleware(next http.Handler, allowed []string) http.Handler {
 		}
 		if allow != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allow)
-			w.Header().Set("Access-Control-Allow-Headers", "content-type,authorization")
+			w.Header().Set("Access-Control-Allow-Headers", "content-type,authorization,x-auth-key")
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

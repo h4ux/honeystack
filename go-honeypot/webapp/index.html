@@ -6,13 +6,21 @@
   <title>Honeypot Remote Console</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%AF%3C/text%3E%3C/svg%3E" />
+  <!-- Vercel Web Analytics + Speed Insights. Both are no-ops outside Vercel. -->
+  <script>window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };</script>
+  <script defer src="/_vercel/insights/script.js"></script>
+  <script defer src="/_vercel/speed-insights/script.js"></script>
 </head>
 <body>
   <!-- CONNECT DIALOG -->
   <div id="connect-overlay" class="overlay">
     <form id="connect-form" class="connect-card">
       <h1>Connect to honeypot</h1>
-      <p class="muted">Point this webapp at a running Go honeypot binary. Grab the auth key from the daemon's startup banner (or its <code>data/auth.key</code> file).</p>
+      <p class="muted">Point this dashboard at any running Go honeypot. Paste the host/IP, control port (default 9090), and the auth key from the daemon banner or <code>data/auth.key</code>. This page can be hosted on Vercel; it talks to <em>your</em> server.</p>
+      <label class="checkbox" id="conn-relay-row">
+        <input id="conn-relay" type="checkbox">
+        use HTTPS relay (required on Vercel / any https:// page talking to a plain http daemon)
+      </label>
       <label class="checkbox" id="conn-proxy-row" hidden>
         <input id="conn-proxy" type="checkbox" checked>
         via this page's origin <span class="muted" id="conn-proxy-hint"></span>
@@ -39,7 +47,8 @@
     </div>
     <nav class="tabs">
       <button class="tab active" data-tab="live">Live</button>
-      <button class="tab" data-tab="sessions">SSH Sessions</button>
+      <button class="tab" data-tab="history">History</button>
+      <button class="tab" data-tab="sessions">Sessions</button>
       <button class="tab" data-tab="services">Services</button>
       <button class="tab" data-tab="config">Config</button>
       <button class="tab" data-tab="stats">Stats</button>
@@ -63,11 +72,36 @@
       <div id="feed" class="feed"></div>
     </section>
 
+    <section id="tab-history" class="tab-panel">
+      <div class="toolbar">
+        <label>From <input id="hist-from" type="datetime-local"></label>
+        <label>To <input id="hist-to" type="datetime-local"></label>
+        <label>Service <select id="hist-service"><option value="">all</option></select></label>
+        <label>Type <select id="hist-type"><option value="">all</option></select></label>
+        <label>IP <input id="hist-ip" placeholder="1.2.3.4"></label>
+        <label>Search <input id="hist-q" placeholder="user, password, command…"></label>
+        <label>Limit <input id="hist-limit" type="number" min="1" max="20000" value="1000" style="width:90px"></label>
+        <button id="hist-run" class="primary">Query</button>
+        <button id="hist-24h" class="ghost">Last 24h</button>
+        <button id="hist-all" class="ghost">All retained</button>
+        <button id="hist-csv" class="ghost">CSV</button>
+        <button id="hist-pdf" class="ghost">PDF report</button>
+      </div>
+      <div id="hist-summary" class="muted"></div>
+      <div class="table-scroll">
+        <table id="hist-table">
+          <thead><tr><th>Time</th><th>Service</th><th>Type</th><th>Source</th><th>User</th><th>Password</th><th>Command / detail</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <section id="tab-sessions" class="tab-panel">
       <div class="split">
         <div class="session-list">
           <div class="session-list-header">
-            <h3>SSH sessions</h3>
+            <h3>Sessions</h3>
+            <select id="session-service-filter"><option value="">all services</option></select>
             <button id="refresh-sessions" class="ghost">Refresh</button>
           </div>
           <ul id="sessions"></ul>
@@ -80,6 +114,16 @@
     </section>
 
     <section id="tab-services" class="tab-panel">
+      <form id="add-service" class="add-service">
+        <strong>Add a listener</strong>
+        <label>name <input id="add-svc-name" placeholder="custom-tcp" required></label>
+        <label>port <input id="add-svc-port" type="number" min="1" max="65535" value="9999" required></label>
+        <label>protocol
+          <select id="add-svc-proto"><option value="tcp">tcp</option><option value="udp">udp</option></select>
+        </label>
+        <label>banner <input id="add-svc-banner" placeholder="optional greeting"></label>
+        <button type="submit" class="primary">Add</button>
+      </form>
       <div id="services-grid" class="services-grid"></div>
     </section>
 
@@ -94,7 +138,21 @@
     </section>
 
     <section id="tab-stats" class="tab-panel">
+      <div class="toolbar">
+        <span class="muted">Aggregated over all retained events (memory ring + replayed <code>events.ndjson</code>).</span>
+        <button id="stats-pdf" class="primary">Download PDF report</button>
+      </div>
       <div id="stats-cards" class="cards"></div>
+      <div class="charts">
+        <div>
+          <h3>Events by hour (UTC)</h3>
+          <canvas id="chart-hourly" width="640" height="180"></canvas>
+        </div>
+        <div>
+          <h3>Events by service</h3>
+          <canvas id="chart-service" width="640" height="180"></canvas>
+        </div>
+      </div>
       <div class="two-col">
         <div>
           <h3>Top source IPs</h3>
@@ -116,6 +174,7 @@
     </section>
   </main>
 
+  <script src="pdf.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

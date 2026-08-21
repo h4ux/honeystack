@@ -1,4 +1,4 @@
-# honeystack
+# honeypot
 
 Two implementations of the same multi-service honeypot:
 
@@ -163,8 +163,8 @@ On startup the daemon prints:
 
 ## Quick start (Go, locally)
 
-You need **Go 1.22+** (the module asks for 1.25) and **Node** only for
-the tiny local webapp server (or open `index.html` directly).
+You need **Go 1.22+** and **Node** only for the tiny local webapp server
+(or open `index.html` directly).
 
 Terminal 1 — daemon:
 
@@ -222,18 +222,18 @@ Install the matching binary (detects OS and CPU):
 
 ```bash
 # Linux / macOS / Git Bash / WSL
-GITHUB_REPO=h4ux/honeystack ./go-honeypot/scripts/install.sh
-GITHUB_REPO=h4ux/honeystack ./go-honeypot/scripts/install.sh --output ./honeypot
+GITHUB_REPO=owner/name ./go-honeypot/scripts/install.sh
+GITHUB_REPO=owner/name ./go-honeypot/scripts/install.sh --output ./honeypot
 ```
 
 ```powershell
 # Windows
-$env:GITHUB_REPO = 'h4ux/honeystack'
+$env:GITHUB_REPO = 'owner/name'
 .\go-honeypot\scripts\install.ps1
 ```
 
 ```bash
-./go-honeypot/scripts/install.sh --repo h4ux/honeystack --from release
+./go-honeypot/scripts/install.sh --repo owner/name --from release
 ./go-honeypot/scripts/install.sh --from actions            # needs `gh`
 ./go-honeypot/scripts/install.sh --from actions --pr 42
 ```
@@ -262,7 +262,7 @@ Skip compiling and pull the CI artifact instead (after the first
 successful push to `main`):
 
 ```bash
-sudo GITHUB_REPO=h4ux/honeystack USE_RELEASE=1 bash setup-ubuntu.sh
+sudo GITHUB_REPO=owner/name USE_RELEASE=1 bash setup-ubuntu.sh
 ```
 
 Then on your laptop run the webapp and connect to

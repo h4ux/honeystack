@@ -31,7 +31,7 @@ To download the CI-built Linux binary instead of compiling on the
 server (after the first successful push to `main`):
 
 ```bash
-sudo GITHUB_REPO=h4ux/honeystack USE_RELEASE=1 bash setup-ubuntu.sh
+sudo GITHUB_REPO=owner/name USE_RELEASE=1 bash setup-ubuntu.sh
 ```
 
 What it does:

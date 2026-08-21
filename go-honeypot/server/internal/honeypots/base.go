@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 type ConnHandler func(ctx context.Context, conn net.Conn, sessionID string, meta ConnMeta)
@@ -106,6 +106,12 @@ func (t *TCP) handle(c net.Conn) {
 	sessionID := eventlog.RandID(8)
 	remoteIP, remotePort := splitHostPort(c.RemoteAddr().String())
 	meta := ConnMeta{RemoteIP: remoteIP, RemotePort: remotePort, LocalPort: t.cfg.Port}
+
+	t.store.OpenSession(eventlog.Session{
+		ID: sessionID, Service: t.name,
+		RemoteIP: meta.RemoteIP, RemotePort: meta.RemotePort,
+	})
+	defer t.store.CloseSession(sessionID)
 
 	t.store.Log(eventlog.Event{
 		Service: t.name, Type: "connection",

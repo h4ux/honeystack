@@ -31,7 +31,7 @@ ADMIN_USER="${ADMIN_USER:-${SUDO_USER:-}}"
 INSTALL_SERVICE="${INSTALL_SERVICE:-1}"
 OPEN_FIREWALL="${OPEN_FIREWALL:-1}"
 HONEYPOT_DIR="${HONEYPOT_DIR:-$(pwd)}"
-SERVER_DIR="$HONEYPOT_DIR/server"
+SERVER_DIR=""
 BIN_PATH="/usr/local/bin/honeypot"
 # If 1, download the matching CI binary instead of compiling locally.
 # Requires GITHUB_REPO=owner/name (or a git remote) and a published nightly release.
@@ -102,14 +102,41 @@ install_go() {
   apt-get install -y golang-go build-essential
 }
 
+resolve_server_dir() {
+  if [[ -f "$HONEYPOT_DIR/server/go.mod" ]]; then
+    SERVER_DIR="$HONEYPOT_DIR/server"
+  elif [[ -f "$HONEYPOT_DIR/go-honeypot/server/go.mod" ]]; then
+    HONEYPOT_DIR="$HONEYPOT_DIR/go-honeypot"
+    SERVER_DIR="$HONEYPOT_DIR/server"
+  elif [[ -f "$HONEYPOT_DIR/go.mod" ]] && grep -qE '^module ' "$HONEYPOT_DIR/go.mod"; then
+    SERVER_DIR="$HONEYPOT_DIR"
+  else
+    die "Could not find server/go.mod under $HONEYPOT_DIR (run this from the go-honeypot directory)"
+  fi
+}
+
 build_binary() {
   if [[ "$USE_RELEASE" == "1" ]]; then
     log "Downloading pre-built binary via scripts/install.sh"
     apt-get install -y curl ca-certificates >/dev/null 2>&1 || true
     bash "$HONEYPOT_DIR/scripts/install.sh" --output "$BIN_PATH"
   else
+    [[ -f "$SERVER_DIR/go.mod" ]] || die "Missing $SERVER_DIR/go.mod"
+    [[ -d "$SERVER_DIR/internal" ]] || die "Missing $SERVER_DIR/internal — unpack the full zip, not just main.go"
     log "Building honeypot binary from $SERVER_DIR"
-    ( cd "$SERVER_DIR" && GOFLAGS=-mod=mod go build -o "$BIN_PATH" . )
+    # Use the distro Go toolchain. Do not download Go 1.25 or fetch
+    # github.com/example/honeypot — this is a local module named "honeypot".
+    (
+      cd "$SERVER_DIR"
+      export GO111MODULE=on
+      export GOTOOLCHAIN=local
+      unset GOFLAGS || true
+      if [[ -d vendor ]]; then
+        go build -mod=vendor -o "$BIN_PATH" .
+      else
+        go build -o "$BIN_PATH" .
+      fi
+    )
   fi
   chmod 0755 "$BIN_PATH"
   if command -v setcap >/dev/null 2>&1; then
@@ -206,6 +233,7 @@ summary() {
 }
 
 require_root
+resolve_server_dir
 configure_real_sshd
 if [[ "$USE_RELEASE" != "1" ]]; then
   install_go

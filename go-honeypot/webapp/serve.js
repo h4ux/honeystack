@@ -92,6 +92,12 @@ const server = http.createServer((req, res) => {
     res.writeHead(403);
     return res.end('forbidden');
   }
+  // Vercel injects these at the edge; locally they do not exist and must
+  // not fall through to index.html, or the browser parses HTML as JS.
+  if (pathname.startsWith('/_vercel/')) {
+    res.writeHead(204);
+    return res.end();
+  }
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
       if (!err && stat.isDirectory()) {

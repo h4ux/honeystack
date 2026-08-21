@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 // WebAPI is shared by HTTP-speaking infrastructure honeypots. It keeps each

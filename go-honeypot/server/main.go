@@ -15,11 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/controlapi"
-	"github.com/example/honeypot/internal/eventlog"
-	"github.com/example/honeypot/internal/honeypots"
-	"github.com/example/honeypot/internal/manager"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/controlapi"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/honeypots"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/manager"
 )
 
 var (
@@ -59,6 +59,12 @@ func main() {
 
 	mgr := manager.New(store)
 	registerHoneypots(mgr, cfg, store)
+	mgr.SetFallback(func(name string, c config.Service, s *eventlog.Store) (manager.Service, error) {
+		if strings.EqualFold(c.Protocol, "udp") {
+			return honeypots.NewUDP(name, c, s), nil
+		}
+		return honeypots.NewGeneric(name, c, s), nil
+	})
 	mgr.Sync(cfg)
 	defer mgr.StopAll()
 

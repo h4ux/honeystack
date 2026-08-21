@@ -7,12 +7,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 func NewRedis(cfg config.Service, store *eventlog.Store) *TCP {
-	return NewTCP("redis", cfg, store, func(ctx context.Context, conn net.Conn, sessionID string, meta ConnMeta) {
+	var t *TCP
+	t = NewTCP("redis", cfg, store, func(ctx context.Context, conn net.Conn, sessionID string, meta ConnMeta) {
+		cfg := t.Cfg()
 		var buf strings.Builder
 		tmp := make([]byte, 512)
 		for {
@@ -44,8 +46,21 @@ func NewRedis(cfg config.Service, store *eventlog.Store) *TCP {
 						evt.Username = "default"
 						evt.Password = parts[1]
 					}
+					ok := shouldAccept(cfg.FakeAuth, evt.Username, evt.Password)
+					if ok {
+						evt.Type = "auth_success"
+						store.SetSessionUsername(sessionID, evt.Username)
+					}
+					if evt.Details == nil {
+						evt.Details = map[string]any{}
+					}
+					evt.Details["accepted"] = ok
 					store.Log(evt)
-					_, _ = conn.Write([]byte("-WRONGPASS invalid username-password pair or user is disabled.\r\n"))
+					if ok {
+						_, _ = conn.Write([]byte("+OK\r\n"))
+					} else {
+						_, _ = conn.Write([]byte("-WRONGPASS invalid username-password pair or user is disabled.\r\n"))
+					}
 				case "PING":
 					store.Log(evt)
 					_, _ = conn.Write([]byte("+PONG\r\n"))
@@ -55,12 +70,13 @@ func NewRedis(cfg config.Service, store *eventlog.Store) *TCP {
 					return
 				default:
 					store.Log(evt)
-					_, _ = conn.Write([]byte("-NOAUTH Authentication required.\r\n"))
+					_, _ = conn.Write([]byte("+OK\r\n"))
 				}
 			}
 			_ = ctx
 		}
 	})
+	return t
 }
 
 // parseResp parses one or more RESP arrays (or inline commands) from `s`.

@@ -2,10 +2,12 @@ package honeypots
 
 import (
 	"context"
+	"io"
 	"net"
+	"strings"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 func NewTelnet(cfg config.Service, store *eventlog.Store) *TCP {
@@ -13,8 +15,12 @@ func NewTelnet(cfg config.Service, store *eventlog.Store) *TCP {
 	if banner == "" {
 		banner = "\r\nUbuntu 22.04 LTS\r\nlogin: "
 	}
-	return NewTCP("telnet", cfg, store, func(ctx context.Context, conn net.Conn, sessionID string, meta ConnMeta) {
-		// Negotiate WILL ECHO, WILL SUPPRESS-GA
+	var t *TCP
+	t = NewTCP("telnet", cfg, store, func(ctx context.Context, conn net.Conn, sessionID string, meta ConnMeta) {
+		cfg := t.Cfg()
+		if b := cfg.Banner; b != "" {
+			banner = b
+		}
 		_, _ = conn.Write([]byte{0xff, 0xfb, 0x01, 0xff, 0xfb, 0x03})
 		_, _ = conn.Write([]byte(banner))
 
@@ -22,7 +28,9 @@ func NewTelnet(cfg config.Service, store *eventlog.Store) *TCP {
 		var username string
 		var buf []byte
 		attempts := 0
+		lastCR := false
 		readBuf := make([]byte, 512)
+		write := func(s string) { _, _ = io.WriteString(conn, s) }
 		for {
 			n, err := conn.Read(readBuf)
 			if err != nil {
@@ -30,6 +38,13 @@ func NewTelnet(cfg config.Service, store *eventlog.Store) *TCP {
 			}
 			data := stripTelnet(readBuf[:n])
 			for _, ch := range data {
+				// Clients send CR LF; without this the LF submits a second,
+				// empty line and (with fake auth on) logs the peer straight in.
+				if ch == '\n' && lastCR {
+					lastCR = false
+					continue
+				}
+				lastCR = ch == '\r'
 				if ch == '\r' || ch == '\n' {
 					if len(buf) == 0 && stage == "user" {
 						continue
@@ -37,23 +52,58 @@ func NewTelnet(cfg config.Service, store *eventlog.Store) *TCP {
 					if stage == "user" {
 						username = string(buf)
 						buf = buf[:0]
-						_, _ = conn.Write([]byte("\r\nPassword: "))
+						store.SetSessionUsername(sessionID, username)
+						write("\r\nPassword: ")
 						stage = "pass"
-					} else {
+					} else if stage == "pass" {
 						password := string(buf)
 						buf = buf[:0]
 						attempts++
+						ok := shouldAccept(cfg.FakeAuth, username, password)
 						store.Log(eventlog.Event{
-							Service: "telnet", Type: "login_attempt", SessionID: sessionID,
+							Service: "telnet", Type: ternary(ok, "auth_success", "login_attempt"), SessionID: sessionID,
 							RemoteIP: meta.RemoteIP, RemotePort: meta.RemotePort, LocalPort: meta.LocalPort,
 							Username: username, Password: password,
+							Details: map[string]any{"accepted": ok, "attempt": attempts},
 						})
+						if ok {
+							env := newShellEnv(shellHostname(cfg), username)
+							write("\r\n")
+							if cfg.Shell != nil && cfg.Shell.Motd != "" {
+								write(strings.ReplaceAll(cfg.Shell.Motd, "\n", "\r\n") + "\r\n")
+							}
+							write(env.prompt())
+							stage = "shell"
+							continue
+						}
 						if attempts >= 3 {
-							_, _ = conn.Write([]byte("\r\nLogin incorrect. Too many failures.\r\n"))
+							write("\r\nLogin incorrect. Too many failures.\r\n")
 							return
 						}
-						_, _ = conn.Write([]byte("\r\nLogin incorrect\r\nlogin: "))
+						write("\r\nLogin incorrect\r\nlogin: ")
 						stage = "user"
+					} else if stage == "shell" {
+						command := string(buf)
+						buf = buf[:0]
+						write("\r\n")
+						if strings.TrimSpace(command) != "" {
+							store.Log(eventlog.Event{
+								Service: "telnet", Type: "command", SessionID: sessionID,
+								RemoteIP: meta.RemoteIP, RemotePort: meta.RemotePort, LocalPort: meta.LocalPort,
+								Username: username, Command: command,
+							})
+							env := newShellEnv(shellHostname(cfg), username)
+							res := runShellCommand(command, env)
+							if res.exit {
+								write("logout\r\n")
+								return
+							}
+							if res.output != "" {
+								write(strings.ReplaceAll(res.output, "\n", "\r\n"))
+							}
+						}
+						env := newShellEnv(shellHostname(cfg), username)
+						write(env.prompt())
 					}
 				} else if ch == 0x7f || ch == 0x08 {
 					if len(buf) > 0 {
@@ -66,6 +116,7 @@ func NewTelnet(cfg config.Service, store *eventlog.Store) *TCP {
 			_ = ctx
 		}
 	})
+	return t
 }
 
 func stripTelnet(in []byte) []byte {

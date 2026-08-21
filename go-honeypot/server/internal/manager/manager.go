@@ -5,8 +5,8 @@ import (
 	"log"
 	"sync"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 type Service interface {
@@ -18,6 +18,7 @@ type Service interface {
 }
 
 type Factory func(cfg config.Service, store *eventlog.Store) (Service, error)
+type NamedFactory func(name string, cfg config.Service, store *eventlog.Store) (Service, error)
 
 type Status struct {
 	Name    string `json:"name"`
@@ -30,6 +31,7 @@ type Manager struct {
 	mu       sync.Mutex
 	store    *eventlog.Store
 	registry map[string]Factory
+	fallback NamedFactory
 	running  map[string]Service
 	status   map[string]Status
 }
@@ -49,16 +51,34 @@ func (m *Manager) Register(name string, f Factory) {
 	m.registry[name] = f
 }
 
+func (m *Manager) SetFallback(f NamedFactory) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fallback = f
+}
+
 func (m *Manager) List() []Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]Status, 0, len(m.registry))
-	for name := range m.registry {
-		st, ok := m.status[name]
-		if !ok {
-			st = Status{Name: name}
-		}
+	seen := map[string]struct{}{}
+	out := make([]Status, 0, len(m.status)+len(m.registry))
+	for name, st := range m.status {
 		out = append(out, st)
+		seen[name] = struct{}{}
+	}
+	for name := range m.registry {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		out = append(out, Status{Name: name})
+		seen[name] = struct{}{}
+	}
+	cfg := config.Get()
+	for name, svc := range cfg.Services {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		out = append(out, Status{Name: name, Port: svc.Port})
 	}
 	return out
 }
@@ -67,24 +87,44 @@ func (m *Manager) List() []Status {
 func (m *Manager) Sync(cfg config.Config) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for name, factory := range m.registry {
-		svcCfg, ok := cfg.Services[name]
-		if !ok {
-			svcCfg = config.Service{Enabled: false}
+	for name, svc := range m.running {
+		want, ok := cfg.Services[name]
+		if !ok || !want.Enabled {
+			m.stopLocked(name, svc)
+		}
+	}
+	for name, svcCfg := range cfg.Services {
+		if !svcCfg.Enabled {
+			continue
+		}
+		factory := m.factoryFor(name, svcCfg)
+		if factory == nil {
+			m.status[name] = Status{Name: name, Port: svcCfg.Port, Error: "no factory for service"}
+			continue
 		}
 		st, running := m.running[name]
-		if svcCfg.Enabled && !running {
+		if !running {
 			m.startLocked(name, factory, svcCfg)
-		} else if !svcCfg.Enabled && running {
-			m.stopLocked(name, st)
-		} else if svcCfg.Enabled && running {
-			if st.Port() != svcCfg.Port {
-				m.stopLocked(name, st)
-				m.startLocked(name, factory, svcCfg)
-			} else {
-				st.UpdateConfig(svcCfg)
-			}
+			continue
 		}
+		if st.Port() != svcCfg.Port {
+			m.stopLocked(name, st)
+			m.startLocked(name, factory, svcCfg)
+		} else {
+			st.UpdateConfig(svcCfg)
+		}
+	}
+}
+
+func (m *Manager) factoryFor(name string, svcCfg config.Service) Factory {
+	if f, ok := m.registry[name]; ok {
+		return f
+	}
+	if m.fallback == nil {
+		return nil
+	}
+	return func(c config.Service, s *eventlog.Store) (Service, error) {
+		return m.fallback(name, c, s)
 	}
 }
 

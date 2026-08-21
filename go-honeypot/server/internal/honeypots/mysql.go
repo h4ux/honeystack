@@ -9,12 +9,14 @@ import (
 	mrand "math/rand"
 	"net"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 func NewMySQL(cfg config.Service, store *eventlog.Store) *TCP {
-	return NewTCP("mysql", cfg, store, func(ctx context.Context, conn net.Conn, sessionID string, meta ConnMeta) {
+	var t *TCP
+	t = NewTCP("mysql", cfg, store, func(ctx context.Context, conn net.Conn, sessionID string, meta ConnMeta) {
+		cfg := t.Cfg()
 		version := cfg.ServerVersion
 		if version == "" {
 			version = "8.0.36"
@@ -60,19 +62,27 @@ func NewMySQL(cfg config.Service, store *eventlog.Store) *TCP {
 				if authHex != "" {
 					pw = "<sha1:" + authHex + ">"
 				}
+				accepted := shouldAccept(cfg.FakeAuth, user, pw)
+				store.SetSessionUsername(sessionID, user)
 				store.Log(eventlog.Event{
-					Service: "mysql", Type: "login_attempt", SessionID: sessionID,
+					Service: "mysql", Type: ternary(accepted, "auth_success", "login_attempt"), SessionID: sessionID,
 					RemoteIP: meta.RemoteIP, RemotePort: meta.RemotePort, LocalPort: meta.LocalPort,
 					Username: user, Password: pw,
-					Details: map[string]any{"database": database},
+					Details: map[string]any{"database": database, "accepted": accepted},
 				})
-				errPkt := errorPacket(1045, "28000", "Access denied for user '"+user+"'@'"+meta.RemoteIP+"' (using password: YES)")
-				_, _ = conn.Write(errPkt)
-				return
+				if !accepted {
+					errPkt := errorPacket(1045, "28000", "Access denied for user '"+user+"'@'"+meta.RemoteIP+"' (using password: YES)")
+					_, _ = conn.Write(errPkt)
+					return
+				}
+				_, _ = conn.Write(okPacket(2))
+				received = received[:0]
+				continue
 			}
 			_ = ctx
 		}
 	})
+	return t
 }
 
 func packetHeader(bodyLen, seq int) []byte {
@@ -134,4 +144,9 @@ func errorPacket(code int, sqlState, message string) []byte {
 	body.WriteString(sqlState)
 	body.WriteString(message)
 	return append(packetHeader(body.Len(), 2), body.Bytes()...)
+}
+
+func okPacket(seq int) []byte {
+	body := []byte{0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00}
+	return append(packetHeader(len(body), seq), body...)
 }

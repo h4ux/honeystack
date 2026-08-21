@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,8 +18,8 @@ import (
 	gliderssh "github.com/gliderlabs/ssh"
 	xssh "golang.org/x/crypto/ssh"
 
-	"github.com/example/honeypot/internal/config"
-	"github.com/example/honeypot/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
 
 type SSH struct {
@@ -282,48 +281,6 @@ func getOrInitSessionID(ctx context.Context, store *eventlog.Store, localPort in
 		RemoteIP: remoteIP, RemotePort: remotePort, LocalPort: localPort,
 	})
 	return id
-}
-
-func shouldAccept(fa *config.SshFakeAuth, username, password string) bool {
-	if fa == nil {
-		return false
-	}
-	for _, u := range fa.RejectAlwaysUsernames {
-		if u == username {
-			return false
-		}
-	}
-	if len(fa.AcceptedPasswords) > 0 {
-		for _, p := range fa.AcceptedPasswords {
-			if p == password {
-				return true
-			}
-		}
-	}
-	inList := false
-	for _, u := range fa.AcceptedUsernames {
-		if u == username {
-			inList = true
-			break
-		}
-	}
-	prob := fa.AcceptProbability
-	if prob <= 0 {
-		prob = 0.15
-	}
-	switch fa.Mode {
-	case "always":
-		return inList
-	case "random":
-		return inList && rand.Float64() < prob
-	case "random-any":
-		return rand.Float64() < prob
-	case "first-attempt":
-		return inList
-	case "never", "":
-		return false
-	}
-	return false
 }
 
 func firstNonEmpty(s ...string) string {

@@ -221,14 +221,17 @@ Click **Connect**. You get Live / History / Sessions / Services / Config
 / Stats tabs. Config changes from the UI are pushed over the socket and
 the daemon starts/stops listeners live.
 
-The Go dashboard's Stats tab is the detailed one: ten KPI tiles (events
-retained, last 24 h, last hour, unique attackers, credential attempts,
-grants + accept rate, fake shell sessions, sessions, busiest service,
-peak hour), seven colour-coded charts (24 h activity with attempts and
-grants overlaid, per-service donut, event types, noisiest IPs, targeted
-ports, 14-day volume, and a weekday-by-hour heatmap), a per-service
-breakdown table, and rankings for credentials, usernames, passwords,
-commands, HTTP paths, client fingerprints and source countries. The Live
+The Go dashboard's Stats tab is the detailed one: thirteen KPI tiles
+(events retained, last 24 h, last hour, unique attackers, credential
+attempts, grants + accept rate, fake shell sessions, sessions, busiest
+service, peak hour, live uptime for this run, time from start to the
+first hit, countries seen), eight colour-coded charts (24 h activity with
+attempts and grants overlaid, per-service donut, event types, noisiest
+IPs, targeted ports, source countries, 14-day volume, and a
+weekday-by-hour heatmap), a per-service breakdown table that also shows
+each listener's events this run and how long after start it was first
+touched, and rankings for credentials, usernames, passwords, commands,
+HTTP paths, client fingerprints and source countries. The Live
 tab carries a counter strip and a country filter, Sessions can be
 filtered by country, state, IP, username, minimum command count and free
 text (then sorted by recency, command count or duration), the Services

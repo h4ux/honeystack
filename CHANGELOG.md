@@ -45,6 +45,14 @@ are no versioned releases yet: `main` is published continuously as the
   [`scripts/update-server.sh`](./go-honeypot/scripts/update-server.sh)
   updates in place with checksum verification, backups and automatic
   rollback (`--check`, `--force`, `--rollback`, `--yes`).
+- **Run-scoped timing in Stats**: a live-ticking "uptime this run" tile,
+  a "first hit after start" tile (how long the host sat untouched, which
+  listener was hit, and how many hits the run has seen), and two new
+  per-service columns — events this run, and time from daemon start to
+  that listener's first hit (`not yet` while it is untouched). The
+  daemon's own startup events do not count as a hit. Exposed as
+  `startedAt`, `uptimeMs`, `eventsSinceStart`, `trafficSinceStart`,
+  `timeToFirstEventMs` and per-service `timeToFirstMs`.
 - **Session filters**: filter by free text (id, IP, username, country,
   operator), service, country, state, source IP, username and minimum
   command count, sorted by recency, command count or duration — all

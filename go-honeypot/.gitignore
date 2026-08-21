@@ -1,0 +1,6 @@
+server/data/
+server/config.json
+*.log
+*.exe
+honeypot
+.DS_Store

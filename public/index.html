@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Honeypot Console</title>
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%AF%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" id="conn-dot"></span>
+      <span class="brand-name">Honeypot Console</span>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="live">Live</button>
+      <button class="tab" data-tab="sessions">SSH Sessions</button>
+      <button class="tab" data-tab="services">Services</button>
+      <button class="tab" data-tab="config">Config</button>
+      <button class="tab" data-tab="stats">Stats</button>
+    </nav>
+    <div class="status" id="status-summary"></div>
+  </header>
+
+  <main>
+    <!-- LIVE -->
+    <section id="tab-live" class="tab-panel active">
+      <div class="toolbar">
+        <label>Filter service
+          <select id="filter-service">
+            <option value="">all</option>
+          </select>
+        </label>
+        <label>Filter type
+          <select id="filter-type">
+            <option value="">all</option>
+          </select>
+        </label>
+        <label>Filter IP
+          <input id="filter-ip" placeholder="e.g. 10.0.0.1" />
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" id="autoscroll" checked /> auto-scroll
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" id="paused" /> pause
+        </label>
+        <button id="clear-feed" class="ghost">Clear view</button>
+      </div>
+      <div id="feed" class="feed"></div>
+    </section>
+
+    <!-- SESSIONS -->
+    <section id="tab-sessions" class="tab-panel">
+      <div class="split">
+        <div class="session-list">
+          <div class="session-list-header">
+            <h3>SSH sessions</h3>
+            <button id="refresh-sessions" class="ghost">Refresh</button>
+          </div>
+          <ul id="sessions"></ul>
+        </div>
+        <div class="session-view">
+          <div id="session-meta">Select a session to view its transcript.</div>
+          <pre id="session-transcript" class="terminal"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- SERVICES -->
+    <section id="tab-services" class="tab-panel">
+      <div id="services-grid" class="services-grid"></div>
+    </section>
+
+    <!-- CONFIG -->
+    <section id="tab-config" class="tab-panel">
+      <div class="toolbar">
+        <span class="muted">Edit and apply the honeypot config. Enabled services will be started or restarted automatically.</span>
+        <button id="config-reload" class="ghost">Reload</button>
+        <button id="config-save" class="primary">Apply</button>
+      </div>
+      <textarea id="config-editor" spellcheck="false"></textarea>
+      <div id="config-status" class="muted"></div>
+    </section>
+
+    <!-- STATS -->
+    <section id="tab-stats" class="tab-panel">
+      <div id="stats-cards" class="cards"></div>
+      <div class="two-col">
+        <div>
+          <h3>Top source IPs</h3>
+          <table id="stats-ips"><thead><tr><th>IP</th><th>Events</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Events by service</h3>
+          <table id="stats-services"><thead><tr><th>Service</th><th>Events</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Top credentials</h3>
+          <table id="stats-creds"><thead><tr><th>Username</th><th>Password</th><th>Count</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Top commands</h3>
+          <table id="stats-commands"><thead><tr><th>Command</th><th>Count</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

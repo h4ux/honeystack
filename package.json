@@ -1,0 +1,22 @@
+{
+  "name": "honeypot-node",
+  "version": "1.0.0",
+  "description": "Multi-service network honeypot with a live web dashboard (SSH, FTP, Telnet, HTTP, RDP, MySQL, VNC, SMB, Redis, custom TCP).",
+  "main": "src/index.js",
+  "bin": {
+    "honeypot": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.21.0",
+    "socket.io": "^4.7.5",
+    "ssh2": "^1.15.0"
+  }
+}

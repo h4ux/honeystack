@@ -1,0 +1,49 @@
+{
+  "control": {
+    "host": "0.0.0.0",
+    "port": 9090,
+    "authKeyFile": "data/auth.key",
+    "allowedOrigins": ["*"]
+  },
+  "storage": {
+    "logFile": "data/events.ndjson",
+    "maxLogRows": 200000,
+    "hostKeyFile": "data/ssh_host_ed25519_key"
+  },
+  "services": {
+    "ssh": {
+      "enabled": true,
+      "port": 22,
+      "banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.4",
+      "hostname": "web-prod-01",
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": ["root", "admin", "ubuntu", "user", "test", "oracle", "pi", "git"],
+        "acceptedPasswords": [],
+        "rejectAlwaysUsernames": []
+      },
+      "shell": {
+        "hostname": "web-prod-01",
+        "username": "root",
+        "motd": "Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-105-generic x86_64)\n"
+      }
+    },
+    "telnet": { "enabled": true, "port": 23, "banner": "\r\nUbuntu 22.04 LTS\r\nweb-prod-01 login: " },
+    "ftp":    { "enabled": true, "port": 21, "banner": "220 (vsFTPd 3.0.5)\r\n" },
+    "http":   { "enabled": true, "port": 80, "serverHeader": "Apache/2.4.52 (Ubuntu)", "loginPagePath": "/login" },
+    "rdp":    { "enabled": true, "port": 3389 },
+    "mysql":  { "enabled": true, "port": 3306, "serverVersion": "8.0.36-0ubuntu0.22.04.1" },
+    "vnc":    { "enabled": true, "port": 5900, "banner": "RFB 003.008\n" },
+    "smb":    { "enabled": true, "port": 445 },
+    "redis":  { "enabled": true, "port": 6379 },
+    "postgres": { "enabled": false, "port": 5432 },
+    "clickhouse": { "enabled": true, "port": 8123, "serverVersion": "24.8.4.13" },
+    "clickhouse-native": { "enabled": true, "port": 9000, "serverVersion": "24.8.4.13" },
+    "mssql": { "enabled": true, "port": 1433, "serverVersion": "16.0.4135.4" },
+    "mongodb": { "enabled": true, "port": 27017, "serverVersion": "7.0.14" },
+    "elasticsearch": { "enabled": true, "port": 9200, "serverVersion": "8.15.1" },
+    "docker": { "enabled": true, "port": 2375, "serverVersion": "27.2.1" },
+    "mqtt": { "enabled": true, "port": 1883, "serverVersion": "2.0.18" }
+  }
+}

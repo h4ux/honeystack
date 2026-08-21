@@ -1,0 +1,75 @@
+{
+  "dashboard": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "username": "admin",
+    "password": "changeme",
+    "bindLoopbackOnly": false
+  },
+  "storage": {
+    "databaseFile": "data/honeypot.db",
+    "maxLogRows": 200000
+  },
+  "services": {
+    "ssh": {
+      "enabled": true,
+      "port": 22,
+      "banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.4",
+      "hostname": "web-prod-01",
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": ["root", "admin", "ubuntu", "user", "test", "oracle", "pi", "git"],
+        "acceptedPasswords": [],
+        "rejectAlwaysUsernames": []
+      },
+      "shell": {
+        "hostname": "web-prod-01",
+        "username": "root",
+        "motd": "Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-105-generic x86_64)\n\n  System information as of $(date)\n\n  System load:  0.08              Processes:             128\n  Usage of /:   43.1% of 78.71GB  Users logged in:       0\n  Memory usage: 22%               IPv4 address for eth0: 10.0.0.14\n  Swap usage:   0%\n\nLast login: $(date -d '2 days ago')\n"
+      }
+    },
+    "telnet": {
+      "enabled": true,
+      "port": 23,
+      "banner": "\r\nUbuntu 22.04.4 LTS\r\nweb-prod-01 login: "
+    },
+    "ftp": {
+      "enabled": true,
+      "port": 21,
+      "banner": "220 (vsFTPd 3.0.5)\r\n"
+    },
+    "http": {
+      "enabled": true,
+      "port": 80,
+      "serverHeader": "Apache/2.4.52 (Ubuntu)",
+      "loginPagePath": "/login"
+    },
+    "rdp": {
+      "enabled": true,
+      "port": 3389
+    },
+    "mysql": {
+      "enabled": true,
+      "port": 3306,
+      "serverVersion": "8.0.36-0ubuntu0.22.04.1"
+    },
+    "vnc": {
+      "enabled": true,
+      "port": 5900,
+      "banner": "RFB 003.008\n"
+    },
+    "smb": {
+      "enabled": true,
+      "port": 445
+    },
+    "redis": {
+      "enabled": true,
+      "port": 6379
+    },
+    "postgres": {
+      "enabled": false,
+      "port": 5432
+    }
+  }
+}

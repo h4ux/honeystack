@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Honeypot Remote Console</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8D%AF%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+  <!-- CONNECT DIALOG -->
+  <div id="connect-overlay" class="overlay">
+    <form id="connect-form" class="connect-card">
+      <h1>Connect to honeypot</h1>
+      <p class="muted">Point this webapp at a running Go honeypot binary. Grab the auth key from the daemon's startup banner (or its <code>data/auth.key</code> file).</p>
+      <label class="checkbox" id="conn-proxy-row" hidden>
+        <input id="conn-proxy" type="checkbox" checked>
+        via this page's origin <span class="muted" id="conn-proxy-hint"></span>
+      </label>
+      <div id="conn-direct-fields">
+        <label>Host / IP <input id="conn-host" placeholder="127.0.0.1" autocomplete="off"></label>
+        <label>Port <input id="conn-port" type="number" min="1" max="65535" value="9090"></label>
+      </div>
+      <label>Auth key <input id="conn-key" placeholder="paste the hex auth key" required autocomplete="off"></label>
+      <label class="checkbox" id="conn-secure-row"><input id="conn-secure" type="checkbox"> use wss:// (TLS)</label>
+      <label class="checkbox"><input id="conn-remember" type="checkbox" checked> remember on this device</label>
+      <div class="row">
+        <button type="submit" class="primary">Connect</button>
+      </div>
+      <div id="conn-error" class="error"></div>
+    </form>
+  </div>
+
+  <header class="topbar" hidden id="topbar">
+    <div class="brand">
+      <span class="dot" id="conn-dot"></span>
+      <span class="brand-name">Honeypot Remote</span>
+      <span id="conn-target" class="muted"></span>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="live">Live</button>
+      <button class="tab" data-tab="sessions">SSH Sessions</button>
+      <button class="tab" data-tab="services">Services</button>
+      <button class="tab" data-tab="config">Config</button>
+      <button class="tab" data-tab="stats">Stats</button>
+    </nav>
+    <div class="right">
+      <span id="status-summary" class="muted"></span>
+      <button id="disconnect" class="ghost">Disconnect</button>
+    </div>
+  </header>
+
+  <main hidden id="main">
+    <section id="tab-live" class="tab-panel active">
+      <div class="toolbar">
+        <label>Filter service <select id="filter-service"><option value="">all</option></select></label>
+        <label>Filter type <select id="filter-type"><option value="">all</option></select></label>
+        <label>Filter IP <input id="filter-ip" placeholder="e.g. 10.0.0.1"></label>
+        <label class="checkbox"><input id="autoscroll" type="checkbox" checked> auto-scroll</label>
+        <label class="checkbox"><input id="paused" type="checkbox"> pause</label>
+        <button id="clear-feed" class="ghost">Clear view</button>
+      </div>
+      <div id="feed" class="feed"></div>
+    </section>
+
+    <section id="tab-sessions" class="tab-panel">
+      <div class="split">
+        <div class="session-list">
+          <div class="session-list-header">
+            <h3>SSH sessions</h3>
+            <button id="refresh-sessions" class="ghost">Refresh</button>
+          </div>
+          <ul id="sessions"></ul>
+        </div>
+        <div class="session-view">
+          <div id="session-meta">Select a session to view its transcript.</div>
+          <pre id="session-transcript" class="terminal"></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-services" class="tab-panel">
+      <div id="services-grid" class="services-grid"></div>
+    </section>
+
+    <section id="tab-config" class="tab-panel">
+      <div class="toolbar">
+        <span class="muted">Edit and apply the honeypot config. Enabled services will be started or restarted automatically.</span>
+        <button id="config-reload" class="ghost">Reload</button>
+        <button id="config-save" class="primary">Apply</button>
+      </div>
+      <textarea id="config-editor" spellcheck="false"></textarea>
+      <div id="config-status" class="muted"></div>
+    </section>
+
+    <section id="tab-stats" class="tab-panel">
+      <div id="stats-cards" class="cards"></div>
+      <div class="two-col">
+        <div>
+          <h3>Top source IPs</h3>
+          <table id="stats-ips"><thead><tr><th>IP</th><th>Events</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Events by service</h3>
+          <table id="stats-services"><thead><tr><th>Service</th><th>Events</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Top credentials</h3>
+          <table id="stats-creds"><thead><tr><th>Username</th><th>Password</th><th>Count</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Top commands</h3>
+          <table id="stats-commands"><thead><tr><th>Command</th><th>Count</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

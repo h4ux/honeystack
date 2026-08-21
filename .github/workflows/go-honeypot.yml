@@ -1,0 +1,150 @@
+# Cross-compile the Go honeypot for Linux, macOS, and Windows.
+# Runs on every push to main and every PR targeting main.
+#
+# Push to main also publishes (or refreshes) a GitHub Release tagged
+# `nightly` so scripts/install.sh can fetch the matching binary without
+# knowing a workflow run id.
+name: go-honeypot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "go-honeypot/**"
+      - ".github/workflows/go-honeypot.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "go-honeypot/**"
+      - ".github/workflows/go-honeypot.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-honeypot-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_MODULE_DIR: go-honeypot/server
+
+jobs:
+  build:
+    name: ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_MODULE_DIR }}/go.mod
+          cache-dependency-path: ${{ env.GO_MODULE_DIR }}/go.sum
+
+      - name: Build
+        working-directory: ${{ env.GO_MODULE_DIR }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          out="honeypot-${GOOS}-${GOARCH}${ext}"
+          mkdir -p "${GITHUB_WORKSPACE}/dist"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=nightly -X main.commit=${GITHUB_SHA}" \
+            -o "${GITHUB_WORKSPACE}/dist/${out}" .
+          ls -lh "${GITHUB_WORKSPACE}/dist/${out}"
+
+      - name: Upload per-target artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: honeypot-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/honeypot-${{ matrix.goos }}-${{ matrix.goarch }}*
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: package + checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: honeypot-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum honeypot-* > SHA256SUMS
+          cat SHA256SUMS
+          ls -lh
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: honeypot-binaries
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: nightly release
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: honeypot-binaries
+          path: dist
+
+      - name: Publish nightly GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          notes="Automated build from \`${GITHUB_SHA}\` on \`main\`.
+
+          Install the binary for this machine:
+
+          \`\`\`bash
+          GITHUB_REPO=${GITHUB_REPOSITORY} ./go-honeypot/scripts/install.sh
+          \`\`\`
+
+          Windows (PowerShell):
+
+          \`\`\`powershell
+          \$env:GITHUB_REPO='${GITHUB_REPOSITORY}'; .\\go-honeypot\\scripts\\install.ps1
+          \`\`\`
+          "
+          gh release delete nightly --cleanup-tag --yes 2>/dev/null || true
+          gh release create nightly dist/* \
+            --title "Nightly $(echo "${GITHUB_SHA}" | cut -c1-7)" \
+            --notes "$notes" \
+            --prerelease \
+            --latest

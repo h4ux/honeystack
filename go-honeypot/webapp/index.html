@@ -58,6 +58,7 @@
     </nav>
     <div class="right">
       <span id="status-summary" class="muted"></span>
+      <button id="update-chip" class="chip-btn" hidden title="Build info and updates"></button>
       <button id="disconnect" class="ghost">Disconnect</button>
     </div>
   </header>
@@ -69,6 +70,7 @@
         <label>Filter service <select id="filter-service"><option value="">all</option></select></label>
         <label>Filter type <select id="filter-type"><option value="">all</option></select></label>
         <label>Filter IP <input id="filter-ip" placeholder="e.g. 10.0.0.1"></label>
+        <label>Country <select id="filter-country"><option value="">all</option></select></label>
         <label class="checkbox"><input id="autoscroll" type="checkbox" checked> auto-scroll</label>
         <label class="checkbox"><input id="paused" type="checkbox"> pause</label>
         <button id="clear-feed" class="ghost">Clear view</button>
@@ -83,6 +85,7 @@
         <label>Service <select id="hist-service"><option value="">all</option></select></label>
         <label>Type <select id="hist-type"><option value="">all</option></select></label>
         <label>IP <input id="hist-ip" placeholder="1.2.3.4"></label>
+        <label>Country <select id="hist-country"><option value="">all</option></select></label>
         <label>Search <input id="hist-q" placeholder="user, password, command…"></label>
         <label>Limit <input id="hist-limit" type="number" min="1" max="20000" value="1000" style="width:90px"></label>
         <button id="hist-run" class="primary">Query</button>
@@ -94,7 +97,7 @@
       <div id="hist-summary" class="muted"></div>
       <div class="table-scroll">
         <table id="hist-table">
-          <thead><tr><th>Time</th><th>Service</th><th>Type</th><th>Source</th><th>User</th><th>Password</th><th>Command / detail</th></tr></thead>
+          <thead><tr><th>Time</th><th>Service</th><th>Type</th><th>Source</th><th>Country</th><th>User</th><th>Password</th><th>Command / detail</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -105,8 +108,28 @@
         <div class="session-list">
           <div class="session-list-header">
             <h3>Sessions</h3>
-            <select id="session-service-filter"><option value="">all services</option></select>
             <button id="refresh-sessions" class="ghost">Refresh</button>
+          </div>
+          <div class="session-filters">
+            <input id="sess-q" placeholder="search id, ip, user, org…">
+            <select id="session-service-filter"><option value="">all services</option></select>
+            <select id="sess-country"><option value="">all countries</option></select>
+            <select id="sess-status">
+              <option value="">any state</option>
+              <option value="active">active only</option>
+              <option value="closed">closed only</option>
+            </select>
+            <input id="sess-ip" placeholder="source IP">
+            <input id="sess-user" placeholder="username">
+            <label class="inline">min cmds <input id="sess-mincmds" type="number" min="0" value="0"></label>
+            <select id="sess-sort">
+              <option value="recent">newest first</option>
+              <option value="oldest">oldest first</option>
+              <option value="commands">most commands</option>
+              <option value="duration">longest</option>
+            </select>
+            <button id="sess-reset" class="ghost">Clear</button>
+            <span id="sess-count" class="muted"></span>
           </div>
           <ul id="sessions"></ul>
         </div>
@@ -174,6 +197,10 @@
           <div class="panel-head"><h3>Targeted ports</h3></div>
           <canvas id="chart-ports"></canvas>
         </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Source countries</h3><span class="muted" id="geo-status"></span></div>
+          <canvas id="chart-countries"></canvas>
+        </div>
         <div class="panel span-2">
           <div class="panel-head"><h3>Daily volume — last 14 days</h3></div>
           <canvas id="chart-daily"></canvas>
@@ -196,7 +223,11 @@
       <div class="two-col">
         <div>
           <h3>Top source IPs</h3>
-          <table id="stats-ips"><thead><tr><th>IP</th><th>Events</th></tr></thead><tbody></tbody></table>
+          <table id="stats-ips"><thead><tr><th>IP</th><th>Country</th><th>Events</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Source countries</h3>
+          <table id="stats-countries"><thead><tr><th>Country</th><th>IPs</th><th>Events</th></tr></thead><tbody></tbody></table>
         </div>
         <div>
           <h3>Events by service</h3>
@@ -230,8 +261,46 @@
     </section>
   </main>
 
+  <!-- BUILD / UPDATE DIALOG -->
+  <div id="update-overlay" class="overlay" hidden>
+    <div class="connect-card update-card">
+      <h1>Server build</h1>
+      <div id="update-status" class="update-status"></div>
+      <table class="kv-table" id="update-table"><tbody></tbody></table>
+
+      <div id="update-howto">
+        <h2>Update the server</h2>
+        <p class="muted">Run this on the honeypot host. It checks the release,
+          backs up the current binary, swaps it in, restarts the service, and
+          rolls back automatically if the new build will not start.</p>
+        <div class="cmd-block">
+          <pre id="update-cmd"></pre>
+          <button class="ghost copy-btn" data-copy="#update-cmd">Copy</button>
+        </div>
+        <details>
+          <summary>Other ways to run it</summary>
+          <div class="cmd-block">
+            <pre id="update-cmd-alt"></pre>
+            <button class="ghost copy-btn" data-copy="#update-cmd-alt">Copy</button>
+          </div>
+        </details>
+        <p class="muted">Restarting rotates the auth key, so this dashboard
+          reconnects with a new key — read it from
+          <code>data/auth.key</code> on the server (the command above prints
+          the path).</p>
+      </div>
+
+      <div class="row update-actions">
+        <a id="update-release-link" class="ghost" href="#" target="_blank" rel="noreferrer">Release notes</a>
+        <button id="update-recheck" class="ghost">Check again</button>
+        <button id="update-close" class="primary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="pdf.js"></script>
   <script src="charts.js"></script>
+  <script src="icons.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -351,3 +351,79 @@ td:last-child { text-align: right; color: var(--warn); }
   .brand .muted { display: none; }
   #hist-table td { grid-template-columns: 80px 1fr; }
 }
+
+/* ------------------------------------------------------------------
+   Build/update chip and dialog, geo badges, session filters.
+   ------------------------------------------------------------------ */
+.chip-btn {
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 5px 11px; font-size: 12px; cursor: pointer;
+  font-family: var(--mono); white-space: nowrap;
+}
+.chip-btn:hover { color: var(--text); }
+.chip-btn.update { color: #0b1020; background: var(--warn); border-color: var(--warn); font-weight: 600; }
+.chip-btn.current { color: var(--ok); border-color: rgba(124,242,200,0.35); }
+
+.update-card { max-width: 620px; max-height: 88vh; overflow-y: auto; }
+.update-card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin: 18px 0 6px; }
+.update-card p { margin: 0 0 10px; }
+.update-status { border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; font-size: 13px; border: 1px solid var(--border); background: var(--panel-2); }
+.update-status.available { border-color: rgba(255,207,107,0.5); background: rgba(255,207,107,0.10); color: var(--warn); }
+.update-status.current { border-color: rgba(124,242,200,0.4); background: rgba(124,242,200,0.08); color: var(--ok); }
+.update-status.unknown { color: var(--muted); }
+.kv-table { background: transparent; border: 0; }
+.kv-table td { border-bottom: 1px solid rgba(255,255,255,0.05); padding: 6px 8px; }
+.kv-table td:first-child { color: var(--muted); width: 40%; font-family: inherit; }
+.kv-table td:last-child { text-align: left; color: var(--text); overflow-wrap: anywhere; }
+.cmd-block { position: relative; margin-bottom: 10px; }
+.cmd-block pre {
+  margin: 0; background: #05070f; color: #cfe0ff; border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 74px 12px 12px; font-family: var(--mono);
+  font-size: 12px; white-space: pre-wrap; word-break: break-all;
+}
+.copy-btn { position: absolute; top: 8px; right: 8px; padding: 4px 10px; font-size: 11px; background: var(--panel); }
+.update-card details { margin-bottom: 6px; }
+.update-card summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.update-actions { justify-content: space-between; align-items: center; gap: 8px; }
+.update-actions a { text-decoration: none; }
+
+/* Country badges next to IPs */
+.geo { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.geo .flag { font-size: 12px; margin-right: 3px; }
+.geo.unknown { opacity: 0.55; }
+td .geo, .event .geo { font-family: var(--mono); }
+
+/* Session filter bar */
+.session-filters {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+}
+.session-filters input, .session-filters select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 7px; padding: 6px 8px; font-size: 12px; min-width: 0; width: 100%;
+}
+.session-filters #sess-q { grid-column: 1 / -1; }
+.session-filters .inline { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.session-filters .inline input { width: 62px; }
+.session-filters button { padding: 6px 10px; font-size: 12px; }
+.session-filters #sess-count { grid-column: 1 / -1; font-size: 11px; }
+
+@media (max-width: 720px) {
+  .chip-btn { font-size: 11px; padding: 5px 9px; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+  .update-card { max-height: 92vh; }
+  .cmd-block pre { font-size: 11px; padding: 34px 12px 12px; }
+  .copy-btn { top: 6px; right: 6px; }
+  .session-filters { grid-template-columns: 1fr; }
+}
+
+/* Service glyphs (icons.js) — sized to sit on the text baseline. */
+.svc-icon { vertical-align: -2px; margin-right: 5px; flex: 0 0 auto; }
+.svc-label { display: inline-flex; align-items: center; gap: 0; }
+.svc-label > span { overflow-wrap: anywhere; }
+.event .service { display: inline-flex; align-items: center; }
+.event .service .svc-icon { margin-right: 4px; }
+.service-card h3 { display: flex; align-items: center; gap: 2px; }
+.chip .svc-icon { margin-right: 2px; }
+#sessions .muted .svc-icon { margin-right: 3px; vertical-align: -1px; }
+#stats-service-table .svc-label, #stats-services .svc-label { gap: 0; }

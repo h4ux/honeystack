@@ -9,7 +9,7 @@
     events: [],
     maxEvents: 500,
     paused: false,
-    filter: { service: '', type: '', ip: '' },
+    filter: { service: '', type: '', ip: '', country: '' },
     services: [],
     config: null,
     selectedSession: null,
@@ -20,7 +20,13 @@
     reconnectAttempts: 0,
     stats: null,
     statsAt: 0,
-    statsTimer: null
+    statsTimer: null,
+    build: null,
+    release: null,
+    geoStats: null,
+    geoByIp: new Map(),
+    geoPending: new Set(),
+    sessionsShown: 0
   };
 
   const $ = (s) => document.querySelector(s);
@@ -239,6 +245,7 @@
       list_services: ['GET', '/v1/services'],
       get_stats: ['GET', '/v1/stats'],
       get_range: ['GET', '/v1/range'],
+      get_version: ['GET', '/v1/version'],
       ping: ['GET', '/health']
     };
     let method = 'GET';
@@ -252,9 +259,17 @@
       path = '/v1/events' + (q.toString() ? '?' + q : '');
     } else if (type === 'get_sessions') {
       const q = new URLSearchParams();
-      if (payload?.service) q.set('service', payload.service);
+      for (const key of ['service', 'ip', 'username', 'country', 'status', 'q', 'sort']) {
+        if (payload && payload[key]) q.set(key, payload[key]);
+      }
+      if (payload?.minCommands) q.set('minCommands', String(payload.minCommands));
+      if (payload?.since) q.set('since', String(payload.since));
+      if (payload?.until) q.set('until', String(payload.until));
       q.set('limit', String(payload?.limit || 200));
       path = '/v1/sessions?' + q;
+    } else if (type === 'geo_lookup') {
+      const ips = (payload && payload.ips) || [];
+      path = '/v1/geo?ips=' + encodeURIComponent(ips.join(','));
     } else if (type === 'get_session') {
       path = '/v1/session?id=' + encodeURIComponent(payload.id);
     } else if (map[type]) {
@@ -300,6 +315,10 @@
       case 'hello':
         state.config = msg.payload.config;
         state.services = msg.payload.services;
+        state.build = msg.payload.build || null;
+        state.geoStats = msg.payload.geo || null;
+        renderUpdateState();
+        checkForUpdate(false);
         state.events = msg.payload.events || [];
         for (const e of state.events) updateFilterOptions(e);
         rerenderFeed();
@@ -351,11 +370,12 @@
   // ---- Live ----
   $('#paused').addEventListener('change', (e) => { state.paused = e.target.checked; });
   $('#clear-feed').addEventListener('click', () => { state.events = []; $('#feed').innerHTML = ''; renderLiveStrip(); });
-  ['#filter-service', '#filter-type', '#filter-ip'].forEach((sel) =>
+  ['#filter-service', '#filter-type', '#filter-ip', '#filter-country'].forEach((sel) =>
     $(sel).addEventListener('input', () => {
       state.filter.service = $('#filter-service').value;
       state.filter.type = $('#filter-type').value;
       state.filter.ip = $('#filter-ip').value.trim();
+      state.filter.country = $('#filter-country').value;
       rerenderFeed();
       renderLiveStrip();
     })
@@ -364,6 +384,12 @@
   function updateFilterOptions(evt) {
     ensureOption('#filter-service', evt.service);
     ensureOption('#filter-type', evt.type);
+    const loc = geoOf(evt);
+    if (loc && loc.countryCode) {
+      ensureOption('#filter-country', loc.countryCode);
+      ensureOption('#hist-country', loc.countryCode);
+      ensureOption('#sess-country', loc.countryCode);
+    }
   }
   function ensureOption(sel, value) {
     if (!value) return;
@@ -378,6 +404,7 @@
     if (state.filter.service && evt.service !== state.filter.service) return false;
     if (state.filter.type && evt.type !== state.filter.type) return false;
     if (state.filter.ip && (evt.remoteIp || '') !== state.filter.ip) return false;
+    if (state.filter.country && !countryMatches(evt, state.filter.country)) return false;
     return true;
   }
   function renderNewEvent(evt) {
@@ -414,9 +441,9 @@
     }
     div.innerHTML = `
       <span class="time">${escape(time)}</span>
-      <span class="service">${escape(evt.service)}</span>
+      <span class="service">${svcIcon(evt.service, 13)}${escape(evt.service)}</span>
       <span class="type">${escape(evt.type)}</span>
-      <span class="ip">${escape(ip)}${port ? ':' + port : ''}</span>
+      <span class="ip">${escape(ip)}${port ? ':' + port : ''} ${ip ? geoBadge(evt) : ''}</span>
       <span class="details">${escape(details.trim())}</span>
       <span class="badge">→ :${localPort || ''}</span>
     `;
@@ -434,9 +461,26 @@
 
   // ---- Sessions ----
   $('#refresh-sessions').addEventListener('click', refreshSessions);
+  // The daemon does the filtering, so a busy honeypot does not have to ship
+  // every session to the browser just to hide most of them.
+  function sessionFilterPayload() {
+    return {
+      service: $('#session-service-filter')?.value || '',
+      country: $('#sess-country')?.value || '',
+      status: $('#sess-status')?.value || '',
+      ip: ($('#sess-ip')?.value || '').trim(),
+      username: ($('#sess-user')?.value || '').trim(),
+      q: ($('#sess-q')?.value || '').trim(),
+      minCommands: Number($('#sess-mincmds')?.value || 0) || 0,
+      sort: $('#sess-sort')?.value || 'recent',
+      limit: 300
+    };
+  }
+
   async function refreshSessions() {
     try {
-      const sessions = await send('get_sessions', { service: $('#session-service-filter')?.value || '', limit: 200 });
+      const payload = sessionFilterPayload();
+      const sessions = await send('get_sessions', payload) || [];
       const list = $('#sessions');
       const filter = $('#session-service-filter');
       const seen = new Set(Array.from(filter.options).map((o) => o.value));
@@ -448,18 +492,44 @@
           filter.appendChild(opt);
           seen.add(s.service);
         }
+        if (s.countryCode) ensureOption('#sess-country', s.countryCode);
+        else if (s.remoteIp) queueGeo(s.remoteIp);
         const li = document.createElement('li');
         if (s.id === state.selectedSession) li.classList.add('active');
         const t = new Date(s.openedAt).toLocaleString();
         const status = s.closedAt ? 'closed' : 'active';
+        const dur = durationText(s);
         li.innerHTML = `
-          <div><span class="ip">${escape(s.remoteIp || '')}</span> <span class="user">${escape(s.username || '')}</span> <span class="muted">${escape(s.service || '')}</span></div>
-          <div class="time">${escape(t)} · ${escape(status)} · ${s.commandCount || 0} cmds</div>
+          <div><span class="ip">${escape(s.remoteIp || '')}</span> ${s.remoteIp ? geoBadge(s) : ''} <span class="user">${escape(s.username || '')}</span> <span class="muted">${svcIcon(s.service, 12)}${escape(s.service || '')}</span></div>
+          <div class="time">${escape(t)} · ${escape(status)}${dur ? ' · ' + escape(dur) : ''} · ${s.commandCount || 0} cmds${s.org ? ' · ' + escape(truncate(s.org, 28)) : ''}</div>
         `;
         li.addEventListener('click', () => { state.selectedSession = s.id; openSession(s.id); refreshSessions(); });
         list.appendChild(li);
       }
+      state.sessionsShown = sessions.length;
+      const active = sessions.filter((x) => !x.closedAt).length;
+      const cmds = sessions.reduce((a, x) => a + (x.commandCount || 0), 0);
+      const countEl = $('#sess-count');
+      if (countEl) {
+        countEl.textContent = sessions.length
+          ? `${sessions.length} sessions · ${active} active · ${cmds} commands`
+          : 'no sessions match these filters';
+      }
     } catch (err) { console.warn(err); }
+  }
+
+  function durationText(sess) {
+    if (!sess.openedAt) return '';
+    const end = sess.closedAt || Date.now();
+    const secs = Math.max(0, Math.round((end - sess.openedAt) / 1000));
+    if (secs < 60) return secs + 's';
+    if (secs < 3600) return Math.round(secs / 60) + 'm';
+    return (secs / 3600).toFixed(1) + 'h';
+  }
+
+  function truncate(s, n) {
+    const str = String(s || '');
+    return str.length > n ? str.slice(0, n - 1) + '…' : str;
   }
   async function openSession(id) {
     // On phones the list and the transcript share the screen; opening a
@@ -468,8 +538,8 @@
     try {
       const s = await send('get_session', { id });
       $('#session-meta').innerHTML = `
-        Session <b>${escape(s.id)}</b> · ${escape(s.service)} ·
-        from <b>${escape(s.remoteIp || '')}</b> · user <b>${escape(s.username || '')}</b> ·
+        Session <b>${escape(s.id)}</b> · ${svcIcon(s.service, 14)}${escape(s.service)} ·
+        from <b>${escape(s.remoteIp || '')}</b> ${s.remoteIp ? geoBadge(s) : ''}${s.org ? ' <span class="muted">' + escape(s.org) + '</span>' : ''} · user <b>${escape(s.username || '')}</b> ·
         opened ${escape(new Date(s.openedAt).toLocaleString())}
         ${s.closedAt ? ' · closed ' + escape(new Date(s.closedAt).toLocaleString()) : ' · <span style="color:var(--ok)">active</span>'}
       `;
@@ -510,7 +580,7 @@
         const isInteractive = ['ssh', 'telnet', 'ftp', 'http', 'redis', 'mysql'].includes(svc.name);
         const t = traffic.get(svc.name);
         card.innerHTML = `
-          <h3><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${window.Charts ? Charts.colorFor(svc.name, 0) : 'var(--accent)'};margin-right:7px;"></span>${escape(svc.name)}</h3>
+          <h3>${svcIcon(svc.name, 18)}${escape(svc.name)}</h3>
           <div class="port">port ${escape(cfg.port ?? svc.port ?? '')} ${escape(cfg.protocol || 'tcp')}</div>
           <div class="port" style="margin-top:6px;">${t
             ? `${num(t.events)} events · ${num(t.uniqueIps)} IPs · ${num(t.attempts)} logins${t.accepted ? ' · ' + num(t.accepted) + ' granted' : ''}`
@@ -612,6 +682,295 @@
     } catch (err) { $('#config-status').textContent = err.message; }
   }
 
+  // ---- GeoIP ----
+  // The daemon annotates events it can resolve from cache at log time; the
+  // rest are filled in here by asking for a batch of IPs and re-rendering.
+  const GEO_TTL_MS = 6 * 60 * 60 * 1000;
+
+  function geoFor(ip) {
+    if (!ip) return null;
+    const hit = state.geoByIp.get(ip);
+    if (hit && Date.now() - hit.at < GEO_TTL_MS) return hit.loc;
+    return null;
+  }
+
+  function rememberGeo(ip, loc) {
+    if (!ip || !loc) return;
+    state.geoByIp.set(ip, { loc, at: Date.now() });
+    if (loc.countryCode) ensureOption('#filter-country', loc.countryCode);
+  }
+
+  // Pull country data for whatever IPs we have seen but cannot label yet.
+  let geoTimer = null;
+  function queueGeo(ip) {
+    if (!ip || state.geoByIp.has(ip) || state.geoPending.has(ip)) return;
+    state.geoPending.add(ip);
+    if (geoTimer) return;
+    geoTimer = setTimeout(flushGeo, 400);
+  }
+  async function flushGeo() {
+    geoTimer = null;
+    const ips = Array.from(state.geoPending).slice(0, 500);
+    if (!ips.length) return;
+    ips.forEach((ip) => state.geoPending.delete(ip));
+    try {
+      const res = await send('geo_lookup', { ips });
+      const locations = (res && res.locations) || {};
+      let learned = 0;
+      for (const [ip, loc] of Object.entries(locations)) {
+        rememberGeo(ip, loc);
+        learned++;
+      }
+      // Remember the misses too, so we do not ask again on every event.
+      for (const ip of ips) {
+        if (!locations[ip]) state.geoByIp.set(ip, { loc: null, at: Date.now() });
+      }
+      if (res && res.geo) state.geoStats = res.geo;
+      if (learned) {
+        if (state.currentTab === 'live') rerenderFeed();
+        if (state.currentTab === 'history') renderHistoryRows();
+        if (state.currentTab === 'sessions') refreshSessions();
+        if (state.currentTab === 'stats') refreshStats(true);
+      }
+    } catch (err) {
+      console.warn('geo lookup failed', err);
+    }
+    if (state.geoPending.size) geoTimer = setTimeout(flushGeo, 1500);
+  }
+
+  // An event may already carry its country; otherwise use the cache.
+  function geoOf(row) {
+    if (!row) return null;
+    if (row.countryCode || row.country) {
+      const loc = { countryCode: row.countryCode, country: row.country, org: row.org };
+      if (row.remoteIp && !state.geoByIp.has(row.remoteIp)) rememberGeo(row.remoteIp, loc);
+      return loc;
+    }
+    const cached = geoFor(row.remoteIp);
+    if (cached) return cached;
+    queueGeo(row.remoteIp);
+    return null;
+  }
+
+  function flagEmoji(code) {
+    if (!code || code.length !== 2 || !/^[A-Za-z]{2}$/.test(code)) return '🏳';
+    return String.fromCodePoint(...code.toUpperCase().split('').map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+  }
+
+  // Compact badge for tables and the live feed.
+  function geoBadge(row) {
+    const loc = geoOf(row);
+    if (!loc) return '<span class="geo unknown" title="country not resolved yet">··</span>';
+    if (loc.private) return `<span class="geo" title="${escape(loc.country || 'private range')}">🏠 local</span>`;
+    if (!loc.countryCode) return '<span class="geo unknown">··</span>';
+    const title = [loc.country, loc.city, loc.org || loc.asn].filter(Boolean).join(' · ');
+    return `<span class="geo" title="${escape(title)}"><span class="flag">${flagEmoji(loc.countryCode)}</span>${escape(loc.countryCode)}</span>`;
+  }
+
+  function geoLabel(row) {
+    const loc = geoOf(row);
+    if (!loc) return '';
+    if (loc.private) return 'local';
+    return [loc.countryCode, loc.country].filter(Boolean).join(' ');
+  }
+
+  function countryMatches(row, wanted) {
+    if (!wanted) return true;
+    const loc = geoOf(row);
+    return !!loc && String(loc.countryCode || '').toUpperCase() === wanted.toUpperCase();
+  }
+
+  // ---- Version check / update instructions ----
+  const RELEASE_CACHE_KEY = 'honeypot-release-cache-v1';
+  const RELEASE_TTL_MS = 30 * 60 * 1000;
+
+  function repoName() {
+    return (state.build && state.build.repo) || 'h4ux/honeystack';
+  }
+
+  async function checkForUpdate(force) {
+    const repo = repoName();
+    const cached = safeParse(localStorage.getItem(RELEASE_CACHE_KEY));
+    if (!force && cached && cached.repo === repo && Date.now() - cached.at < RELEASE_TTL_MS) {
+      state.release = cached.release;
+      renderUpdateState();
+      return;
+    }
+    try {
+      // api.github.com allows cross-origin GETs, so this works from the
+      // Vercel-hosted page as well as a local one.
+      let res = await fetch(`https://api.github.com/repos/${repo}/releases/tags/nightly`, {
+        headers: { Accept: 'application/vnd.github+json' }
+      });
+      if (!res.ok) {
+        res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+          headers: { Accept: 'application/vnd.github+json' }
+        });
+      }
+      if (!res.ok) throw new Error('GitHub API returned ' + res.status);
+      const rel = await res.json();
+      state.release = {
+        name: rel.name || rel.tag_name,
+        tag: rel.tag_name,
+        url: rel.html_url,
+        publishedAt: rel.published_at,
+        commit: releaseCommit(rel),
+        assets: (rel.assets || []).length
+      };
+      localStorage.setItem(RELEASE_CACHE_KEY, JSON.stringify({ repo, at: Date.now(), release: state.release }));
+    } catch (err) {
+      state.release = { error: err.message };
+    }
+    renderUpdateState();
+  }
+
+  // CI puts the commit in the release title ("Nightly e16c23d") and in the
+  // notes ("Automated build from `<sha>`").
+  function releaseCommit(rel) {
+    const fromName = /([0-9a-f]{7,40})/.exec(rel.name || '');
+    const fromBody = /build from `([0-9a-f]{7,40})`/i.exec(rel.body || '');
+    return (fromBody && fromBody[1]) || (fromName && fromName[1]) || '';
+  }
+
+  function updateState() {
+    const build = state.build || {};
+    const rel = state.release || {};
+    if (rel.error) return 'unknown';
+    if (!build.commit || build.commit === 'none' || !rel.commit) return 'unknown';
+    const a = build.commit.toLowerCase();
+    const b = rel.commit.toLowerCase();
+    return (a.startsWith(b) || b.startsWith(a)) ? 'current' : 'available';
+  }
+
+  function renderUpdateState() {
+    const chip = $('#update-chip');
+    if (!chip) return;
+    const build = state.build || {};
+    const short = (build.commit || '').slice(0, 7);
+    const state_ = updateState();
+    chip.hidden = false;
+    chip.classList.toggle('update', state_ === 'available');
+    chip.classList.toggle('current', state_ === 'current');
+    const label = build.version && build.version !== 'dev'
+      ? build.version + (short ? ' · ' + short : '')
+      : (short || 'dev build');
+    chip.textContent = state_ === 'available' ? '⬆ update available' : label;
+    chip.title = state_ === 'available'
+      ? `Server is on ${short || 'an unknown build'}; ${(state.release.commit || '').slice(0, 7)} is published — click for instructions`
+      : 'Server build info';
+    renderUpdateDialog();
+  }
+
+  function renderUpdateDialog() {
+    const build = state.build || {};
+    const rel = state.release || {};
+    const st = updateState();
+    const statusEl = $('#update-status');
+    if (statusEl) {
+      statusEl.className = 'update-status ' + st;
+      if (st === 'available') {
+        statusEl.innerHTML = `<b>Update available.</b> The server runs <code>${escape((build.commit || '').slice(0, 7))}</code>; the latest published build is <code>${escape((rel.commit || '').slice(0, 7))}</code>.`;
+      } else if (st === 'current') {
+        statusEl.innerHTML = `<b>Up to date.</b> The server runs the latest published build (<code>${escape((build.commit || '').slice(0, 7))}</code>).`;
+      } else if (rel.error) {
+        statusEl.innerHTML = `Could not reach the GitHub release API: ${escape(rel.error)}. The update command below still works.`;
+      } else {
+        statusEl.innerHTML = 'This build does not report a commit, so it cannot be compared with the published release. Updating is still safe — it backs up and rolls back on failure.';
+      }
+    }
+
+    const rows = [
+      ['Version', build.version || '—'],
+      ['Commit', build.commit || '—'],
+      ['Go / platform', [build.goVersion, build.os && build.arch ? build.os + '/' + build.arch : ''].filter(Boolean).join(' · ') || '—'],
+      ['Binary', build.binary || '—'],
+      ['Listeners', build.services != null ? String(build.services) : '—'],
+      ['Started', build.startedAt ? `${new Date(build.startedAt).toLocaleString()} (up ${uptime(build.startedAt)})` : '—'],
+      ['Repository', repoName()],
+      ['Latest release', rel.name ? `${rel.name}${rel.publishedAt ? ' · ' + new Date(rel.publishedAt).toLocaleString() : ''}` : (rel.error ? 'unavailable' : '—')],
+      ['GeoIP', geoStatusText()]
+    ];
+    const body = $('#update-table tbody');
+    if (body) {
+      body.innerHTML = rows.map(([k, v]) => `<tr><td>${escape(k)}</td><td>${escape(String(v))}</td></tr>`).join('');
+    }
+
+    const base = `https://raw.githubusercontent.com/${repoName()}/main/go-honeypot/scripts/update-server.sh`;
+    const cmd = $('#update-cmd');
+    if (cmd) cmd.textContent = `curl -fsSL ${base} | sudo bash`;
+    const alt = $('#update-cmd-alt');
+    if (alt) {
+      alt.textContent = [
+        '# download first, read it, then run it',
+        `curl -fsSL ${base} -o update-server.sh`,
+        'sudo bash update-server.sh',
+        '',
+        '# unattended (answers yes to every prompt)',
+        `curl -fsSL ${base} | sudo bash -s -- --yes`,
+        '',
+        '# just compare versions, change nothing',
+        `curl -fsSL ${base} | sudo bash -s -- --check`,
+        '',
+        '# undo the last update',
+        `curl -fsSL ${base} | sudo bash -s -- --rollback`
+      ].join('\n');
+    }
+    const link = $('#update-release-link');
+    if (link) {
+      link.href = rel.url || `https://github.com/${repoName()}/releases`;
+    }
+  }
+
+  function geoStatusText() {
+    const g = state.geoStats;
+    if (!g) return '—';
+    if (!g.enabled) return 'disabled on the server';
+    return `on · ${g.cached || 0} IPs cached · ${g.lookups || 0} lookups · ${g.failures || 0} failed`;
+  }
+
+  function uptime(startedAt) {
+    const secs = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    const d = Math.floor(secs / 86400);
+    const h = Math.floor((secs % 86400) / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    if (d) return `${d}d ${h}h`;
+    if (h) return `${h}h ${m}m`;
+    return `${m}m`;
+  }
+
+  $('#update-chip').addEventListener('click', () => {
+    renderUpdateDialog();
+    $('#update-overlay').hidden = false;
+  });
+  $('#update-close').addEventListener('click', () => { $('#update-overlay').hidden = true; });
+  $('#update-overlay').addEventListener('click', (e) => {
+    if (e.target === $('#update-overlay')) $('#update-overlay').hidden = true;
+  });
+  $('#update-recheck').addEventListener('click', () => {
+    $('#update-status').textContent = 'Checking…';
+    checkForUpdate(true);
+  });
+  $$('.copy-btn').forEach((btn) => btn.addEventListener('click', async () => {
+    const target = $(btn.dataset.copy);
+    if (!target) return;
+    try {
+      await navigator.clipboard.writeText(target.textContent);
+      const old = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = old; }, 1200);
+    } catch {
+      // Clipboard is blocked in some contexts; select the text instead.
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') $('#update-overlay').hidden = true;
+  });
+
   // ---- Stats ----
   // The daemon recomputes the whole aggregate on every call, so a busy
   // honeypot would otherwise re-render the tab per event.
@@ -662,7 +1021,15 @@
       { label: 'Shell sessions', value: s.shellSessions, sub: `${num(s.commands)} commands captured` },
       { label: 'Open sessions', value: s.activeSessions, sub: `${num(s.totalSessions)} sessions retained` },
       { label: 'Busiest service', value: busiest ? busiest.key : '—', sub: busiest ? `${num(busiest.count)} events` : 'no traffic yet', text: true },
-      { label: 'Peak hour (UTC)', value: s.peakHour || '—', sub: s.peakHourCount ? `${num(s.peakHourCount)} events in that hour` : 'last 24h', text: true }
+      { label: 'Peak hour (UTC)', value: s.peakHour || '—', sub: s.peakHourCount ? `${num(s.peakHourCount)} events in that hour` : 'last 24h', text: true },
+      {
+        label: 'Countries seen',
+        value: (s.topCountries || []).length,
+        sub: (s.topCountries || [])[0]
+          ? `top: ${flagEmoji(s.topCountries[0].code)} ${s.topCountries[0].name || s.topCountries[0].code} (${num(s.topCountries[0].count)})`
+          : (state.geoStats && state.geoStats.enabled ? 'resolving…' : 'geoip disabled on server'),
+        text: false
+      }
     ];
     $('#stats-cards').innerHTML = cards.map((c, i) => `
       <div class="card ${CARD_COLORS[i % CARD_COLORS.length]}">
@@ -682,8 +1049,16 @@
 
     drawStatsCharts(s, timeline);
 
-    tableRows('#stats-ips', s.topIps, (r) => [r.key, num(r.count)]);
+    tableRows('#stats-ips', s.topIps, (r) => {
+      const row = { remoteIp: r.key };
+      return [escape(r.key), geoBadge(row) + ' ' + escape(geoLabel(row).replace(/^\S+\s*/, '')), num(r.count)];
+    }, true);
+    tableRows('#stats-countries', s.topCountries, (r) => [
+      `${flagEmoji(r.code)} ${escape(r.name || r.code || 'unknown')}`,
+      num(r.uniqueIps), num(r.count)
+    ], true);
     tableRows('#stats-services', s.byService, (r) => [serviceCell(r.key), num(r.count)], true);
+    $('#geo-status').textContent = geoStatusText();
     tableRows('#stats-creds', s.topCreds, (r) => [r.username || '—', r.password || '—', num(r.count)]);
     tableRows('#stats-commands', s.topCommands, (r) => [r.key, num(r.count)]);
     tableRows('#stats-users', s.topUsernames, (r) => [r.key, num(r.count)]);
@@ -742,6 +1117,14 @@
       }), { theme: 'dark', unit: 'events' });
     });
 
+    panel('#chart-countries', (s.topCountries || []).length, (canvas) => {
+      C.hbars(canvas, (s.topCountries || []).slice(0, 9).map((r) => ({
+        label: `${flagEmoji(r.code)} ${r.code || r.name || '??'}`,
+        value: r.count,
+        note: [r.name, r.uniqueIps ? r.uniqueIps + ' unique IPs' : ''].filter(Boolean).join(' · ')
+      })), { theme: 'dark', labelWidth: 110 });
+    });
+
     panel('#chart-daily', (s.daily || []).length, (canvas) => {
       C.bars(canvas, (s.daily || []).map((b) => ({ label: b.label, value: b.count, color: '#6bd2ff' })), { theme: 'dark', aspect: 3.6, maxHeight: 240 });
     });
@@ -772,17 +1155,19 @@
   function typeColor(key, i) { return TYPE_COLORS[key] || Charts.PALETTE[i % Charts.PALETTE.length]; }
 
   function serviceCell(name) {
+    if (window.ServiceIcons) return ServiceIcons.label(name, 15);
     const color = window.Charts ? Charts.colorFor(name, 0) : 'var(--accent)';
     return `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:6px;"></span>${escape(name)}`;
   }
 
+  // raw=true means the mapper already produced HTML for every cell.
   function tableRows(sel, rows, map, raw) {
     const table = $(sel);
     if (!table) return;
     const list = rows || [];
     const body = table.querySelector('tbody');
-    body.innerHTML = list.map((r) => '<tr>' + map(r).map((cell, i) =>
-      `<td>${raw && i === 0 ? cell : escape(String(cell))}</td>`).join('') + '</tr>').join('');
+    body.innerHTML = list.map((r) => '<tr>' + map(r).map((cell) =>
+      `<td>${raw ? cell : escape(String(cell))}</td>`).join('') + '</tr>').join('');
     const holder = table.parentElement;
     if (holder && holder.parentElement && holder.parentElement.classList.contains('two-col')) {
       holder.hidden = !list.length;
@@ -790,6 +1175,9 @@
   }
 
   function num(v) { return Number(v || 0).toLocaleString(); }
+  function svcIcon(name, size) {
+    return window.ServiceIcons ? ServiceIcons.svg(name, size || 14) : '';
+  }
   function shortStamp(ms) {
     const d = new Date(ms);
     if (Number.isNaN(d.getTime())) return '—';
@@ -841,7 +1229,7 @@
       chip('granted', num(granted)),
       chip('last event', last ? ago(last) : '—')
     ].concat(top.map(([name, count]) =>
-      `<span class="chip"><span class="sw" style="background:${window.Charts ? Charts.colorFor(name, 0) : 'var(--accent)'}"></span>${escape(name)} <b>${num(count)}</b></span>`));
+      `<span class="chip">${svcIcon(name, 13)}${escape(name)} <b>${num(count)}</b></span>`));
     el.innerHTML = chips.join('');
   }
   function chip(label, value) { return `<span class="chip">${escape(label)} <b>${escape(String(value))}</b></span>`; }
@@ -871,8 +1259,27 @@
     refreshServices();
   });
 
-  const sessFilter = $('#session-service-filter');
-  if (sessFilter) sessFilter.addEventListener('change', refreshSessions);
+  ['#session-service-filter', '#sess-country', '#sess-status', '#sess-sort'].forEach((sel) => {
+    const el = $(sel);
+    if (el) el.addEventListener('change', refreshSessions);
+  });
+  let sessDebounce;
+  ['#sess-q', '#sess-ip', '#sess-user', '#sess-mincmds'].forEach((sel) => {
+    const el = $(sel);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      clearTimeout(sessDebounce);
+      sessDebounce = setTimeout(refreshSessions, 250);
+    });
+  });
+  const sessReset = $('#sess-reset');
+  if (sessReset) sessReset.addEventListener('click', () => {
+    ['#sess-q', '#sess-ip', '#sess-user'].forEach((sel) => { if ($(sel)) $(sel).value = ''; });
+    if ($('#sess-mincmds')) $('#sess-mincmds').value = 0;
+    ['#session-service-filter', '#sess-country', '#sess-status'].forEach((sel) => { if ($(sel)) $(sel).value = ''; });
+    if ($('#sess-sort')) $('#sess-sort').value = 'recent';
+    refreshSessions();
+  });
 
   const sessBack = $('#sessions-back');
   if (sessBack) sessBack.addEventListener('click', () => {
@@ -931,16 +1338,21 @@
     }
   }
 
+  const renderHistoryRows = () => renderHistory();
+
   function renderHistory() {
     const tbody = $('#hist-table tbody');
     tbody.innerHTML = '';
-    for (const e of historyRows) {
+    const wantCountry = $('#hist-country') ? $('#hist-country').value : '';
+    const shown = wantCountry ? historyRows.filter((e) => countryMatches(e, wantCountry)) : historyRows;
+    for (const e of shown) {
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td data-label="Time">${escape(new Date(e.ts).toLocaleString())}</td>
         <td data-label="Service">${escape(e.service || '')}</td>
         <td data-label="Type">${escape(e.type || '')}</td>
         <td data-label="Source">${escape(e.remoteIp || '')}${e.remotePort ? ':' + e.remotePort : ''}</td>
+        <td data-label="Country">${e.remoteIp ? geoBadge(e) + ' ' + escape(geoLabel(e).replace(/^\S+\s*/, '')) : ''}</td>
         <td data-label="User">${escape(e.username || '')}</td>
         <td data-label="Password">${escape(e.password || '')}</td>
         <td data-label="Detail">${escape(detailText(e))}</td>
@@ -956,10 +1368,11 @@
       }
       tbody.appendChild(tr);
     }
-    const span = historyRows.length
-      ? `${new Date(historyRows[0].ts).toLocaleString()} → ${new Date(historyRows[historyRows.length - 1].ts).toLocaleString()}`
+    const span = shown.length
+      ? `${new Date(shown[0].ts).toLocaleString()} → ${new Date(shown[shown.length - 1].ts).toLocaleString()}`
       : 'no events in range';
-    $('#hist-summary').textContent = `${historyRows.length} events · ${span}`;
+    const filtered = shown.length !== historyRows.length ? ` (of ${historyRows.length} queried)` : '';
+    $('#hist-summary').textContent = `${shown.length} events${filtered} · ${span}`;
   }
 
   function detailText(e) {
@@ -988,16 +1401,20 @@
     runHistory();
   });
   $('#hist-ip').addEventListener('keydown', (e) => { if (e.key === 'Enter') runHistory(); });
+  $('#hist-country').addEventListener('change', () => renderHistory());
   $('#hist-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') runHistory(); });
 
   $('#hist-csv').addEventListener('click', () => {
-    const head = ['time', 'service', 'type', 'remoteIp', 'remotePort', 'localPort', 'username', 'password', 'command', 'sessionId'];
+    const head = ['time', 'service', 'type', 'remoteIp', 'remotePort', 'localPort',
+      'countryCode', 'country', 'org', 'username', 'password', 'command', 'sessionId'];
     const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
     const lines = [head.join(',')];
     for (const e of historyRows) {
+      const loc = geoOf(e) || {};
       lines.push([
         new Date(e.ts).toISOString(), e.service, e.type, e.remoteIp, e.remotePort,
-        e.localPort, e.username, e.password, detailText(e), e.sessionId
+        e.localPort, loc.countryCode || '', loc.country || '', loc.org || '',
+        e.username, e.password, detailText(e), e.sessionId
       ].map(esc).join(','));
     }
     download(new Blob([lines.join('\n')], { type: 'text/csv' }), `honeystack-events-${stamp()}.csv`);
@@ -1044,7 +1461,9 @@
       ['Attempts refused', num(stats.rejected)],
       ['Fake shell sessions', num(stats.shellSessions)],
       ['Commands captured', num(stats.commands)],
-      ['Sessions (open / retained)', `${num(stats.activeSessions)} / ${num(stats.totalSessions)}`]
+      ['Sessions (open / retained)', `${num(stats.activeSessions)} / ${num(stats.totalSessions)}`],
+      ['Countries seen', String((stats.topCountries || []).length)],
+      ['Server build', state.build ? `${state.build.version || '?'} (${(state.build.commit || '').slice(0, 7)})` : 'unknown']
     ];
     doc.table(['Metric', 'Value'], summary, [230, 200], 9.5);
     doc.space(8);
@@ -1057,6 +1476,7 @@
       ['Event types', '#chart-types', 900, 0],
       ['Noisiest source IPs', '#chart-ips', 900, 0],
       ['Targeted ports', '#chart-ports', 900, 0],
+      ['Source countries', '#chart-countries', 900, 0],
       ['Daily volume - last 14 days', '#chart-daily', 900, 250],
       ['When the scanning happens (weekday x hour, UTC)', '#chart-heatmap', 900, 250]
     ];
@@ -1093,8 +1513,14 @@
         r.service, r.port || '', r.events, r.uniqueIps, r.attempts, r.accepted, r.commands,
         r.lastSeen ? shortStamp(r.lastSeen) : ''
       ]), [86, 40, 54, 44, 50, 54, 44, 118]);
-    section('Top source IPs', ['IP', 'Events'],
-      (stats.topIps || []).map((r) => [r.key, r.count]), [260, 90]);
+    section('Top source IPs', ['IP', 'Country', 'Events'],
+      (stats.topIps || []).map((r) => {
+        const loc = geoOf({ remoteIp: r.key }) || {};
+        return [r.key, [loc.countryCode, loc.country].filter(Boolean).join(' ') || '', r.count];
+      }), [170, 180, 90]);
+    section('Source countries', ['Country', 'Code', 'Unique IPs', 'Events'],
+      (stats.topCountries || []).map((r) => [r.name || '', r.code || '', r.uniqueIps, r.count]),
+      [200, 60, 90, 90]);
     section('Events by service', ['Service', 'Events'],
       (stats.byService || []).map((r) => [r.key, r.count]), [260, 90]);
     section('Event types', ['Type', 'Count'],
@@ -1120,16 +1546,17 @@
       doc.text(`Events (${list.length} most recent of ${rows.length} in view)`, { size: 13, bold: true });
       doc.space(2);
       doc.table(
-        ['Time', 'Service', 'Type', 'Source', 'User', 'Detail'],
+        ['Time', 'Service', 'Type', 'Source', 'CC', 'User', 'Detail'],
         list.map((e) => [
           new Date(e.ts).toLocaleString(),
           e.service || '',
           e.type || '',
           e.remoteIp || '',
+          (geoOf(e) || {}).countryCode || '',
           e.username || '',
           detailText(e)
         ]),
-        [104, 62, 78, 86, 58, 127],
+        [100, 56, 72, 84, 24, 52, 127],
         7.5
       );
     }

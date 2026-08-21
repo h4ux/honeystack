@@ -75,7 +75,7 @@ jobs:
           ls -lh "${GITHUB_WORKSPACE}/dist/${out}"
 
       - name: Upload per-target artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: honeypot-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/honeypot-${{ matrix.goos }}-${{ matrix.goarch }}*
@@ -102,7 +102,7 @@ jobs:
           ls -lh
 
       - name: Upload combined artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: honeypot-binaries
           path: dist/

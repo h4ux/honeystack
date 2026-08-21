@@ -298,16 +298,16 @@ Ubuntu/Debian server and **asks before every step**:
 Run it on the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
 sudo bash deploy-remote.sh
 ```
 
 Piping works too — prompts come from `/dev/tty`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash
 # unattended:
-curl -fsSL .../deploy-remote.sh | sudo bash -s -- --yes
+curl -fsSL --show-error .../deploy-remote.sh | sudo bash -s -- --yes
 ```
 
 Useful flags: `--ssh-port`, `--control-port`, `--dir`, `--user`,
@@ -326,7 +326,8 @@ The dashboard's build chip tells you when a newer release exists. To
 apply it, on the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh -o update-server.sh
+sudo bash update-server.sh
 ```
 
 It backs the current binary up, verifies the download against the

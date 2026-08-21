@@ -9,14 +9,14 @@
 # changes anything.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh -o update-server.sh
+#   curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh -o update-server.sh
 #   sudo bash update-server.sh
 #
 #   # or piped (prompts come from /dev/tty):
-#   curl -fsSL .../update-server.sh | sudo bash
+#   curl -fsSL --show-error .../update-server.sh | sudo bash
 #
 #   # unattended:
-#   curl -fsSL .../update-server.sh | sudo bash -s -- --yes
+#   curl -fsSL --show-error .../update-server.sh | sudo bash -s -- --yes
 #
 # Options:
 #   -y, --yes            assume yes for every question

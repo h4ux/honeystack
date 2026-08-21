@@ -897,22 +897,27 @@
 
     const base = `https://raw.githubusercontent.com/${repoName()}/main/go-honeypot/scripts/update-server.sh`;
     const cmd = $('#update-cmd');
-    if (cmd) cmd.textContent = `curl -fsSL ${base} | sudo bash`;
+    // One line, no pipe: a failed or truncated download cannot silently
+    // run, and curl reports the error instead of swallowing it.
+    if (cmd) cmd.textContent = `curl -fsSL --show-error ${base} -o update-server.sh && sudo bash update-server.sh`;
     const alt = $('#update-cmd-alt');
     if (alt) {
       alt.textContent = [
-        '# download first, read it, then run it',
-        `curl -fsSL ${base} -o update-server.sh`,
-        'sudo bash update-server.sh',
+        '# read it before running it',
+        `curl -fsSL --show-error ${base} -o update-server.sh`,
+        'less update-server.sh && sudo bash update-server.sh',
+        '',
+        '# short form (pipe); --show-error means a failed download is not silent',
+        `curl -fsSL --show-error ${base} | sudo bash`,
         '',
         '# unattended (answers yes to every prompt)',
-        `curl -fsSL ${base} | sudo bash -s -- --yes`,
+        `curl -fsSL --show-error ${base} | sudo bash -s -- --yes`,
         '',
         '# just compare versions, change nothing',
-        `curl -fsSL ${base} | sudo bash -s -- --check`,
+        `curl -fsSL --show-error ${base} | sudo bash -s -- --check`,
         '',
         '# undo the last update',
-        `curl -fsSL ${base} | sudo bash -s -- --rollback`
+        `curl -fsSL --show-error ${base} | sudo bash -s -- --rollback`
       ].join('\n');
     }
     const link = $('#update-release-link');

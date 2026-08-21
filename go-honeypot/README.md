@@ -214,14 +214,19 @@ panel with copy-paste update instructions.
 On the server:
 
 ```bash
-# check only — prints both versions, changes nothing (exit 10 = update available)
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash -s -- --check
+# fetch it once (no pipe: a failed download cannot silently run nothing)
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh -o update-server.sh
 
-# update: backup, swap, restart, roll back automatically if it will not start
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash
+sudo bash update-server.sh --check    # compare versions only (exit 10 = update available)
+sudo bash update-server.sh            # update: backup, swap, restart, auto-rollback
+sudo bash update-server.sh --rollback # undo the last update
+```
 
-# undo the last update
-curl -fsSL .../update-server.sh | sudo bash -s -- --rollback
+The short pipe form works too — keep `--show-error` so a download failure
+is reported instead of running an empty script:
+
+```bash
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash
 ```
 
 `update-server.sh` finds the install from the `honeypot-go` systemd unit,
@@ -366,18 +371,18 @@ straight off the internet — and it **asks before every change**:
 
 ```bash
 # download first, then run — you can read it before it touches anything
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
 sudo bash deploy-remote.sh
 ```
 
 ```bash
 # or pipe it straight in; prompts are read from /dev/tty, so they still work
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash
 ```
 
 ```bash
 # unattended: answer yes to everything
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash -s -- --yes
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash -s -- --yes
 ```
 
 Flags:

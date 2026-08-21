@@ -19,7 +19,7 @@ the real sshd to `1980`, install and start `honeypot-go.service`, and
 disable the host firewall:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
 sudo bash deploy-remote.sh
 ```
 
@@ -27,8 +27,8 @@ Piping it works as well (prompts are read from `/dev/tty`), and `--yes`
 makes it unattended:
 
 ```bash
-curl -fsSL .../deploy-remote.sh | sudo bash
-curl -fsSL .../deploy-remote.sh | sudo bash -s -- --yes
+curl -fsSL --show-error .../deploy-remote.sh | sudo bash
+curl -fsSL --show-error .../deploy-remote.sh | sudo bash -s -- --yes
 ```
 
 Everything lands in `/opt/honeystack` (`--dir` to change), runs as the
@@ -91,8 +91,12 @@ The dashboard's top-bar chip turns into **⬆ update available** when a
 newer build is published. To apply it on the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh -o update-server.sh
+sudo bash update-server.sh
 ```
+
+Fetching the file first (rather than piping it straight into `bash`) means
+a failed download stops with an error instead of silently running nothing.
 
 The script finds the install from the `honeypot-go` unit, verifies the
 download against the release `SHA256SUMS`, keeps the previous binary as
@@ -113,7 +117,7 @@ To run the check on a schedule without applying anything:
 ```bash
 sudo tee /etc/cron.daily/honeystack-update-check >/dev/null <<'CRON'
 #!/bin/sh
-curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh \
+curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh \
   | sh -s -- --check >/var/log/honeystack-update-check.log 2>&1
 CRON
 sudo chmod +x /etc/cron.daily/honeystack-update-check

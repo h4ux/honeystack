@@ -12,14 +12,14 @@
 #   4. disable the host firewall so the decoy ports are reachable
 #
 # Usage (interactive — recommended, prompts work because stdin is a tty):
-#   curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
+#   curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
 #   sudo bash deploy-remote.sh
 #
 # Usage (piped; prompts are read from /dev/tty):
-#   curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash
+#   curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash
 #
 # Usage (unattended, answers yes to everything):
-#   curl -fsSL .../deploy-remote.sh | sudo bash -s -- --yes
+#   curl -fsSL --show-error .../deploy-remote.sh | sudo bash -s -- --yes
 #
 # Options:
 #   -y, --yes              assume yes for every question (unattended)

@@ -31,7 +31,15 @@ places instead of sitting side by side.
 **Live** — the streaming event feed, with a counter strip above it
 (events in buffer, distinct source IPs, credential attempts, how many
 were granted, age of the last event, and a colour-coded chip per active
-service).
+service). Filter by service, type, IP or country.
+
+**Sessions** — filter by free text (id, IP, username, country, network
+operator), service, country, state (active/closed), source IP, username
+and minimum command count, then sort by newest, oldest, most commands or
+longest. The list shows each session's country, duration, command count
+and network operator; the footer summarises what matched. Filtering
+happens on the daemon, so a busy honeypot does not ship thousands of
+sessions to the browser just to hide most of them.
 
 **Services** — one card per listener with its state, port, fake-auth
 settings, and the traffic it has actually attracted: events, unique
@@ -49,6 +57,7 @@ colour-coded charts:
 | Event types | ranked bars, coloured by event kind |
 | Noisiest source IPs | ranked bars |
 | Targeted ports | ranked bars, `port/service` |
+| Source countries | ranked bars with flags, unique IPs per country |
 | Daily volume | one bar per day, last 14 days |
 | When the scanning happens | weekday x hour heatmap (UTC) |
 
@@ -56,7 +65,8 @@ Charts are canvas-drawn, hover for exact values, repaint on resize, and
 carry no third-party dependency. Below them: a per-service breakdown
 table and rankings for source IPs, services, credentials, usernames,
 passwords, commands, requested HTTP paths, and client fingerprints
-(user agents / protocol version strings).
+(user agents / protocol version strings), plus source countries with
+their unique-IP counts.
 
 ## History and reports
 
@@ -77,9 +87,18 @@ passwords, commands, requested HTTP paths, and client fingerprints
 
 ## Feature parity with the Node version
 
-- Multi-service honeypots: **SSH, Telnet, FTP, HTTP, RDP, MySQL, VNC,
-  SMB, Redis, PostgreSQL, ClickHouse (HTTP + native), MSSQL, MongoDB,
-  Elasticsearch, Docker Engine API, and MQTT**.
+- Multi-service honeypots — **41 listeners** out of the box across six
+  families:
+  - *Remote access / shells:* SSH, Telnet, RDP, VNC, ADB (Android Debug
+    Bridge)
+  - *Files and directories:* FTP, SMB, rsync, TFTP, LDAP
+  - *Databases and caches:* MySQL, PostgreSQL, MSSQL, MongoDB, Redis,
+    Memcached, Elasticsearch, ClickHouse (HTTP + native)
+  - *Web and orchestration:* HTTP, Docker Engine API, MQTT
+  - *Mail:* SMTP (25), SMTP submission (587), IMAP, POP3
+  - *Proxies:* Squid-style HTTP proxy (3128), HTTP proxy (8080), SOCKS4/5
+  - *VPN and infrastructure:* OpenVPN (UDP+TCP), IPsec/IKE (500, 4500),
+    WireGuard, L2TP, PPTP, SIP (UDP+TCP), DNS, SNMP, NTP
 - Fake SSH shell (Ubuntu-looking prompt, `ls`, `cat`, `whoami`, `uname`,
   `wget`, `sudo`, etc.) — nothing is executed on the host.
 - Configurable random-accept auth (modes: `always`, `random`,
@@ -104,9 +123,122 @@ passwords, commands, requested HTTP paths, and client fingerprints
 The emulators never execute submitted SQL, shell commands, container
 actions, or message payloads.
 
-Needs **Go 1.22+**. The module path is `honeypot` (local). Do not use
-`github.com/example/honeypot` — that is not a real repository and `sudo`
-builds will try to clone it from GitHub.
+### Mail services
+
+| Service | Default port | What is captured |
+|---|---|---|
+| SMTP | 25 | EHLO, `AUTH LOGIN`/`PLAIN` credentials (base64-decoded), `MAIL FROM`/`RCPT TO` relay attempts, message bodies |
+| SMTP submission | 587 | same emulator on the submission port |
+| IMAP | 143 | `LOGIN` and `AUTHENTICATE PLAIN/LOGIN` credentials, mailbox commands |
+| POP3 | 110 | `USER`/`PASS`, `APOP` digests, `CAPA` |
+
+Relay probes are answered with `250 Ok` right through `DATA`, because an
+apparently-open relay is what a spam scanner is looking for — the message
+is logged and discarded, never delivered.
+
+### Proxy services
+
+| Service | Default port | What is captured |
+|---|---|---|
+| Squid-style proxy | 3128 | `CONNECT host:port` targets, absolute-URI requests, `Proxy-Authorization` credentials, User-Agent |
+| HTTP proxy | 8080 | same emulator on the other common proxy port |
+| SOCKS | 1080 | SOCKS4/4a userid + destination, SOCKS5 username/password (RFC 1929) and requested host:port |
+
+Every proxy request is refused (`403` / SOCKS "not allowed") — nothing is
+ever forwarded. Each event records where the client wanted to go, and
+`details.intent` labels the well-known abuse pattern behind the port
+(`spam relay` for 25/465/587, `ssh tunnel` for 22, and so on).
+
+### VPN and infrastructure services
+
+| Service | Default port | What is captured |
+|---|---|---|
+| OpenVPN | 1194/udp + 1194/tcp | hard-reset opcode, client session id; answers with a server reset so the client keeps talking |
+| IPsec IKE | 500/udp, 4500/udp | IKEv1/v2 exchange type, initiator SPI, NAT-T detection; replies `NO_PROPOSAL_CHOSEN` |
+| WireGuard | 51820/udp | handshake-initiation type and sender index (stays silent, like a real peer) |
+| L2TP | 1701/udp | control/data flag, version, client hostname strings |
+| PPTP | 1723 | Start-Control-Connection request, hostname and vendor strings; answers with a plausible reply |
+| SIP | 5060/udp + 5060/tcp | REGISTER/INVITE/OPTIONS, digest `Authorization` username + response, `From`/`To`, toll-fraud flag on INVITE |
+| DNS | 53/udp (off by default) | queried name and type, ANY/TXT amplification flag; answers NXDOMAIN only |
+| SNMP | 161/udp | community string (logged as a credential), PDU type, first OID; the reply is never larger than the request |
+| NTP | 123/udp | client requests get a normal answer; mode 6/7 (monlist) is logged as `amplification_attempt` and never answered |
+| TFTP | 69/udp | requested filename (read) or upload attempt (write), answered with an error |
+
+None of the UDP emulators can be used as an amplifier: replies are either
+absent or no larger than the request.
+
+DNS ships **disabled** because `systemd-resolved` already owns port 53 on
+a typical Ubuntu box. Enable it after freeing the port (set
+`DNSStubListener=no` in `/etc/systemd/resolved.conf`).
+
+## Country lookups (GeoIP)
+
+Every event and session carries the source country when it is known:
+
+```jsonc
+"geoip": {
+  "enabled": true,
+  "provider": "ipwho.is",          // or ip-api, ipinfo, or a custom url
+  "cacheFile": "data/geoip-cache.json",
+  "ttlHours": 720,
+  "timeoutMs": 4000,
+  "rateLimitPerMin": 40
+}
+```
+
+- Lookups run on a background worker, so a honeypot handler never waits on
+  the network. Events are annotated at log time when the IP is already
+  cached, and on the way out to the dashboard once the lookup lands.
+- Results are cached in memory and on disk (`data/geoip-cache.json`), so
+  each IP is asked about once per `ttlHours` (30 days by default).
+- Private, loopback and link-local addresses are labelled locally and
+  never sent anywhere.
+- The dashboard shows a flag + ISO code next to every IP, adds a country
+  filter to Live, History and Sessions, and a "Source countries" chart,
+  table and KPI tile to Stats. The `/v1/geo?ips=a,b,c` endpoint (or the
+  `geo_lookup` WebSocket action) resolves a batch on demand.
+- **Privacy:** attacker IPs are sent to the configured provider. Set
+  `geoip.enabled` to `false` to keep every address on the box; the
+  dashboard then shows `··` instead of a flag. Point `geoip.url` at your
+  own service (with an `{ip}` placeholder) to self-host the lookup.
+
+## Version check and updating
+
+The daemon reports what it is (`/v1/version`, and in the `hello` payload):
+version, commit, Go version, platform, uptime, listener count, and the
+repository it was built from. The dashboard compares that commit with the
+latest published release and shows either the build id or an
+**⬆ update available** chip in the top bar. Clicking it opens the build
+panel with copy-paste update instructions.
+
+On the server:
+
+```bash
+# check only — prints both versions, changes nothing (exit 10 = update available)
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash -s -- --check
+
+# update: backup, swap, restart, roll back automatically if it will not start
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash
+
+# undo the last update
+curl -fsSL .../update-server.sh | sudo bash -s -- --rollback
+```
+
+`update-server.sh` finds the install from the `honeypot-go` systemd unit,
+verifies the download against the release `SHA256SUMS`, keeps the last
+three binaries as `honeypot.bak-<timestamp>`, and restores the previous
+one if the new build fails to come up. Restarting rotates the auth key,
+so reconnect the dashboard with the key from
+`<install-dir>/data/auth.key`.
+
+Flags: `--check`, `--force`, `--rollback`, `--yes`, `--repo`, `--tag`,
+`--binary`, `--service`, `--path`, `--keep`.
+
+Needs **Go 1.25+** (`golang.org/x/crypto` v0.52.0 sets that floor). The
+module path is `github.com/h4ux/honeystack/go-honeypot/server`. Ubuntu
+ships an older Go, so leave `GOTOOLCHAIN` on its default `auto` and the
+distro toolchain will fetch the matching one on first build — or skip
+compiling altogether and install the release binary.
 
 ## Quick start (locally)
 
@@ -114,7 +246,7 @@ Terminal 1 — start the server:
 
 ```bash
 cd server
-GOTOOLCHAIN=local go run . --config config.json
+go run . --config config.json
 ```
 
 The banner will print your auth key. Note the `port` it listens on
@@ -303,6 +435,17 @@ To skip compiling on the server and pull the CI artifact instead:
 ```bash
 sudo GITHUB_REPO=owner/name USE_RELEASE=1 bash setup-ubuntu.sh
 ```
+
+## API additions
+
+| Endpoint | WebSocket action | Purpose |
+|---|---|---|
+| `GET /v1/version` | `get_version` | build info: version, commit, Go, platform, uptime, listeners, repo |
+| `GET /v1/geo?ips=a,b` | `geo_lookup` | resolve a batch of IPs to country/city/ASN from the cache |
+| `GET /v1/sessions?...` | `get_sessions` | now takes `service`, `ip`, `username`, `country`, `status`, `minCommands`, `since`, `until`, `q`, `sort`, `limit` |
+
+The `hello` payload also carries `build` and `geo` blocks, which is what
+the dashboard uses for the version chip and the GeoIP status line.
 
 ## Auth model
 

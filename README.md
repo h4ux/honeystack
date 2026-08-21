@@ -1,4 +1,11 @@
-# honeypot
+# Honeystack
+
+[![ci](https://github.com/h4ux/honeystack/actions/workflows/ci.yml/badge.svg)](https://github.com/h4ux/honeystack/actions/workflows/ci.yml)
+[![go-honeypot build](https://github.com/h4ux/honeystack/actions/workflows/go-honeypot.yml/badge.svg)](https://github.com/h4ux/honeystack/actions/workflows/go-honeypot.yml)
+[![nightly release](https://img.shields.io/github/v/release/h4ux/honeystack?include_prereleases&label=nightly)](https://github.com/h4ux/honeystack/releases/tag/nightly)
+[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](go-honeypot/server/go.mod)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+
 
 Two implementations of the same multi-service honeypot:
 
@@ -9,12 +16,20 @@ Two implementations of the same multi-service honeypot:
 | Storage | SQLite (`data/honeypot.db`) | In-memory ring + `events.ndjson` |
 | Auth for the UI | HTTP basic (`admin` / `changeme`) | Per-run auth key printed at startup |
 | Deploy | `setup-ubuntu.sh` | `go-honeypot/scripts/deploy-remote.sh` (curl-able, step-by-step) or `go-honeypot/setup-ubuntu.sh` |
+| Update | manual `git pull` | `go-honeypot/scripts/update-server.sh` (checksum-verified, auto-rollback) |
+| Services | 10 | 41, incl. mail, proxies, VPN and UDP infrastructure |
+| GeoIP | — | country/ASN per source IP, cached on disk |
 
 Both emulate **SSH, Telnet, FTP, HTTP, RDP, MySQL, VNC, SMB, Redis,
-and PostgreSQL**. The Go edition additionally covers **ClickHouse
-(HTTP + native), MSSQL, MongoDB, Elasticsearch, Docker Engine API, and
-MQTT**. They log connections and credential attempts and capture commands
-typed in a fake SSH shell. Pick one; do not run both on the same ports.
+and PostgreSQL**. The Go edition runs **41 listeners**, adding
+**ClickHouse (HTTP + native), MSSQL, MongoDB, Elasticsearch, Docker
+Engine API, MQTT, Memcached, LDAP, rsync, ADB**, mail (**SMTP,
+submission, IMAP, POP3**), open proxies (**Squid-style HTTP proxy, HTTP
+proxy, SOCKS4/5**), VPN endpoints (**OpenVPN, IPsec/IKE, WireGuard,
+L2TP, PPTP**) and UDP infrastructure (**SIP, DNS, SNMP, NTP, TFTP**).
+It also resolves attacker IPs to countries. They log connections and
+credential attempts and capture commands typed in a fake SSH shell. Pick
+one; do not run both on the same ports.
 
 ---
 
@@ -142,6 +157,15 @@ Ubuntu ops: [go-honeypot/INSTRUCTIONS.md](./go-honeypot/INSTRUCTIONS.md)
 ## How it is different from Node
 
 - No Node runtime on the server — one static binary.
+- 41 listeners instead of 10: mail (SMTP/submission/IMAP/POP3), open
+  proxies (Squid-style, HTTP, SOCKS4/5), VPN endpoints (OpenVPN,
+  IPsec/IKE, WireGuard, L2TP, PPTP), UDP infrastructure (SIP, DNS, SNMP,
+  NTP, TFTP), plus Memcached, LDAP, rsync and ADB.
+- Source IPs are resolved to **country / city / ASN**, cached on disk, and
+  shown as a flag next to every address (switch off with
+  `geoip.enabled: false`).
+- Reports its own build over the API, so the dashboard can tell you when a
+  newer release is published and hand you the update command.
 - Dashboard is **not** served by the honeypot. You connect remotely.
 - Every start generates a new 64-char hex **auth key** (also written to
   `go-honeypot/server/data/auth.key`). That key is the only thing that
@@ -163,7 +187,7 @@ On startup the daemon prints:
 
 ## Quick start (Go, locally)
 
-You need **Go 1.22+** and **Node** only for the tiny local webapp server
+You need **Go 1.25+** and **Node** only for the tiny local webapp server
 (or open `index.html` directly).
 
 Terminal 1 — daemon:
@@ -204,9 +228,14 @@ peak hour), seven colour-coded charts (24 h activity with attempts and
 grants overlaid, per-service donut, event types, noisiest IPs, targeted
 ports, 14-day volume, and a weekday-by-hour heatmap), a per-service
 breakdown table, and rankings for credentials, usernames, passwords,
-commands, HTTP paths, and client fingerprints. The Live tab carries a
-counter strip, the Services tab shows the traffic each listener drew, and
-the PDF report contains all of it.
+commands, HTTP paths, client fingerprints and source countries. The Live
+tab carries a counter strip and a country filter, Sessions can be
+filtered by country, state, IP, username, minimum command count and free
+text (then sorted by recency, command count or duration), the Services
+tab shows the traffic each listener drew, and the PDF report contains all
+of it. The top bar shows the server's build and turns into an
+**⬆ update available** chip when a newer release is published — clicking
+it gives you the exact command to run on the server.
 
 Build a binary instead of `go run`:
 
@@ -291,6 +320,22 @@ Note: the download needs the `nightly` release, which appears after the
 first successful `go-honeypot` CI run on `main`. Until then build the
 binary yourself and pass `--binary`.
 
+## Updating the Go server
+
+The dashboard's build chip tells you when a newer release exists. To
+apply it, on the server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash
+```
+
+It backs the current binary up, verifies the download against the
+release `SHA256SUMS`, restarts the service, and rolls back automatically
+if the new build does not come up. `--check` compares versions without
+changing anything, `--rollback` undoes the last update. Restarting
+rotates the auth key, so reconnect the dashboard with the key from
+`<install-dir>/data/auth.key`.
+
 ## Ubuntu deployment (Go, from a checkout)
 
 ```bash
@@ -339,11 +384,15 @@ go-honeypot/
 │   └── internal/
 │       ├── config/         JSON config
 │       ├── eventlog/       ring buffer + NDJSON + pub/sub
+│       ├── geoip/          country lookups with an on-disk cache
 │       ├── manager/        start/stop/sync services
 │       ├── controlapi/     WebSocket API (auth-key gated)
 │       └── honeypots/      ssh, telnet, ftp, http, rdp, mysql, vnc, smb,
 │                           redis, postgres, clickhouse, mssql, mongodb,
-│                           elasticsearch, docker, mqtt
+│                           elasticsearch, docker, mqtt, smtp, imap, pop3,
+│                           memcached, ldap, rsync, adb, squid/http-proxy,
+│                           socks, openvpn, ipsec, wireguard, l2tp, pptp,
+│                           sip, dns, snmp, ntp, tftp
 ├── webapp/                 remote dashboard (static HTML/JS)
 │   ├── index.html
 │   ├── app.js
@@ -353,6 +402,7 @@ go-honeypot/
 │   └── serve.js            `node serve.js` → http://127.0.0.1:5173
 ├── scripts/
 │   ├── deploy-remote.sh    guided server deploy (binary, sshd, service, firewall)
+│   ├── update-server.sh    in-place update with checksum + auto-rollback
 │   ├── install.sh          download binary for this OS (Linux/macOS)
 │   ├── install.ps1         same for Windows PowerShell
 │   └── install.cmd
@@ -365,6 +415,15 @@ SSH fake-auth modes are the same JSON shape as Node
 
 ---
 
+# Contributing
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — dev setup, the checks CI runs, and
+  a step-by-step for adding a honeypot service.
+- [SECURITY.md](./SECURITY.md) — how to report a vulnerability privately,
+  and what is in scope for a honeypot.
+- [SUPPORT.md](./SUPPORT.md) — deployment help and the usual gotchas.
+- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) · [CHANGELOG.md](./CHANGELOG.md) · [LICENSE](./LICENSE) (MIT)
+
 # Security (both versions)
 
 - Change Node dashboard credentials before exposing port 8080. For Go,
@@ -376,6 +435,12 @@ SSH fake-auth modes are the same JSON shape as Node
 - The fake SSH shell does **not** execute commands, but isolate the host
   anyway (dedicated VPS, no shared credentials, no access to internal
   networks).
+- GeoIP lookups send attacker IPs to a third-party service
+  (`ipwho.is` by default). Set `geoip.enabled: false`, or point
+  `geoip.url` at your own resolver, if that is not acceptable.
+- The open-proxy, mail-relay and VPN emulators never forward, deliver or
+  tunnel anything — they answer far enough to record the request and then
+  refuse it.
 - Some VPS providers forbid honeypot-style traffic — check the ToS.
 - Do not run the Node and Go honeypots at the same time on the default
   ports; they will collide on 22/21/23/80/….

@@ -85,6 +85,80 @@ Env overrides (set before the command):
 sudo REAL_SSH_PORT=2222 CONTROL_PORT=9443 ADMIN_USER=ubuntu bash setup-ubuntu.sh
 ```
 
+## 2b. Keeping it updated
+
+The dashboard's top-bar chip turns into **⬆ update available** when a
+newer build is published. To apply it on the server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh | sudo bash
+```
+
+The script finds the install from the `honeypot-go` unit, verifies the
+download against the release `SHA256SUMS`, keeps the previous binary as
+`honeypot.bak-<timestamp>`, restarts the service, and rolls back
+automatically if the new build fails to start. Useful variants:
+
+```bash
+sudo bash update-server.sh --check      # compare versions only (exit 10 = update available)
+sudo bash update-server.sh --yes        # unattended
+sudo bash update-server.sh --rollback   # undo the last update
+```
+
+A restart rotates the auth key, so the dashboard needs the new one from
+`/opt/honeystack/data/auth.key`.
+
+To run the check on a schedule without applying anything:
+
+```bash
+sudo tee /etc/cron.daily/honeystack-update-check >/dev/null <<'CRON'
+#!/bin/sh
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/update-server.sh \
+  | sh -s -- --check >/var/log/honeystack-update-check.log 2>&1
+CRON
+sudo chmod +x /etc/cron.daily/honeystack-update-check
+```
+
+## 2c. Ports the honeypot now opens
+
+The default config enables **41 listeners**, including UDP ones. If you
+kept a firewall enabled, make sure both protocols are allowed — the
+deploy script's "open the ports it needs" path already does this
+(`ufw allow 500/udp` and friends).
+
+Two ports need attention on a normal Ubuntu box:
+
+| Port | Conflict | What to do |
+|---|---|---|
+| 53/udp (DNS) | `systemd-resolved` owns it | ships **disabled**; to enable it, set `DNSStubListener=no` in `/etc/systemd/resolved.conf`, `systemctl restart systemd-resolved`, then enable `dns` in the config |
+| 25 (SMTP) | a local Postfix/Exim would own it | `systemctl disable --now postfix` (or move the honeypot's `smtp.port`) |
+
+Anything that cannot bind is reported per-service in the dashboard's
+Services tab with the exact error, and the rest keep running.
+
+## 2d. Country lookups
+
+`geoip` is on by default and resolves each source IP once, caching the
+answer in `/opt/honeystack/data/geoip-cache.json`:
+
+```bash
+# turn it off entirely
+sudo python3 - <<'EOF'
+import json
+p = "/opt/honeystack/config.json"
+cfg = json.load(open(p))
+cfg.setdefault("geoip", {})["enabled"] = False
+json.dump(cfg, open(p, "w"), indent=2)
+EOF
+sudo systemctl restart honeypot-go
+```
+
+It sends attacker IPs to `ipwho.is` (configurable: `provider` can be
+`ip-api` or `ipinfo`, or set `url` to your own service with an `{ip}`
+placeholder). Private and loopback addresses are never sent anywhere.
+Lookups are rate-limited (`rateLimitPerMin`, default 40) and never block a
+honeypot handler.
+
 ## 3. Reconnect on the new SSH port
 
 ```bash

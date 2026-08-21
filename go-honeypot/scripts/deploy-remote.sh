@@ -474,16 +474,19 @@ EOF
 }
 
 # ======================================================= step 4: firewall
-firewall_ports() { # honeypot ports from config, for the "open instead" path
+firewall_ports() { # "<port>/<proto>" per enabled service, for the "open instead" path
   if command -v python3 >/dev/null 2>&1 && [[ -f "$INSTALL_DIR/config.json" ]]; then
-    python3 - "$INSTALL_DIR/config.json" <<'PY' 2>/dev/null || true
+    python3 - "$INSTALL_DIR/config.json" <<'PORTS'
 import json, sys
 with open(sys.argv[1]) as f:
     cfg = json.load(f)
 for name, svc in (cfg.get("services") or {}).items():
     if svc.get("enabled") and svc.get("port"):
-        print(svc["port"])
-PY
+        proto = (svc.get("protocol") or "tcp").lower()
+        if proto not in ("tcp", "udp"):
+            proto = "tcp"
+        print("%d/%s" % (svc["port"], proto))
+PORTS
   fi
 }
 
@@ -535,8 +538,10 @@ configure_firewall() {
       ports="$(firewall_ports)"
       ufw allow "${SSH_PORT}/tcp" comment 'real ssh' >/dev/null || true
       ufw allow "${CONTROL_PORT}/tcp" comment 'honeypot control API' >/dev/null || true
+      # Entries are already "<port>/<proto>", so UDP decoys (DNS, SNMP, NTP,
+      # IKE, WireGuard, ...) are opened as UDP instead of silently as TCP.
       for p in $ports; do
-        [[ -n "$p" ]] && ufw allow "${p}/tcp" comment 'honeypot' >/dev/null || true
+        [[ -n "$p" ]] && ufw allow "${p}" comment 'honeypot' >/dev/null || true
       done
       ufw --force enable >/dev/null || true
       ok "opened ${SSH_PORT}, ${CONTROL_PORT} and every enabled honeypot port"

@@ -144,8 +144,11 @@ jobs:
           \`\`\`
           "
           gh release delete nightly --cleanup-tag --yes 2>/dev/null || true
+          # No --prerelease here: GitHub rejects "--prerelease --latest"
+          # together ("Latest release cannot be draft or prerelease"), and
+          # scripts/install.sh falls back to /releases/latest when the
+          # nightly tag lookup misses, so nightly has to be the latest.
           gh release create nightly dist/* \
             --title "Nightly $(echo "${GITHUB_SHA}" | cut -c1-7)" \
             --notes "$notes" \
-            --prerelease \
             --latest

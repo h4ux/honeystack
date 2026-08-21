@@ -137,7 +137,7 @@ td:last-child { text-align: right; color: var(--warn); }
 
 .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 20px; }
 .charts h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.4px; }
-.charts canvas { width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+.charts canvas { width: 100%; height: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
 .add-service { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
 .add-service label { color: var(--muted); font-size: 12px; }
 .add-service input, .add-service select { display: block; margin-top: 4px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 6px 8px; border-radius: 8px; font-family: var(--mono); }
@@ -150,8 +150,158 @@ td:last-child { text-align: right; color: var(--warn); }
 #hist-table td:last-child { text-align: left; color: var(--text); overflow-wrap: anywhere; max-width: 520px; }
 #hist-summary { margin-bottom: 8px; }
 
+.mobile-only { display: none; }
+
 @media (max-width: 900px) {
   .split { grid-template-columns: 1fr; }
   .two-col, .charts { grid-template-columns: 1fr; }
   .event { grid-template-columns: 70px 90px 110px 120px 1fr; }
+}
+
+/* ------------------------------------------------------------------
+   Phones and small tablets.
+   The dashboard is data-dense, so below 720px every multi-column grid
+   collapses and the wide tables turn into stacked cards. Inputs stay at
+   16px because iOS Safari zooms the viewport on focus for anything
+   smaller.
+   ------------------------------------------------------------------ */
+@media (max-width: 720px) {
+  body { font-size: 15px; }
+  main {
+    padding: 12px 12px calc(16px + env(safe-area-inset-bottom));
+  }
+
+  /* Connect card */
+  .overlay { padding: 12px; align-items: flex-start; overflow-y: auto; }
+  .connect-card { max-width: none; padding: 18px 16px; border-radius: 14px; margin: 12px 0; }
+  .connect-card h1 { font-size: 18px; }
+  .connect-card label input:not([type=checkbox]) { font-size: 16px; padding: 10px; }
+  .connect-card .checkbox { align-items: flex-start; line-height: 1.35; }
+  .connect-card .checkbox input { margin-top: 3px; flex: 0 0 auto; }
+  .connect-card .row { margin-top: 16px; }
+  .connect-card .row .primary { width: 100%; padding: 12px; font-size: 16px; }
+
+  /* Top bar becomes two rows with a swipeable tab strip */
+  .topbar {
+    grid-template-columns: 1fr auto;
+    gap: 8px 12px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-top));
+  }
+  .brand { min-width: 0; }
+  .brand-name { font-size: 14px; }
+  .brand .muted {
+    margin-left: 0;
+    font-size: 11px;
+    max-width: 42vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; padding: 9px 14px; font-size: 14px; }
+  .right { justify-self: end; gap: 8px; }
+  #status-summary { font-size: 11px; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Toolbars stack into full-width controls */
+  .toolbar { gap: 8px; }
+  .toolbar label { flex: 1 1 46%; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+  .toolbar label.checkbox { flex-direction: row; align-items: center; flex-basis: auto; }
+  .toolbar input, .toolbar select { width: 100%; font-size: 16px; padding: 9px 10px; }
+  .toolbar button { flex: 1 1 auto; min-height: 42px; }
+  .toolbar > span.muted { flex: 1 1 100%; }
+  #hist-limit { width: 100% !important; }
+
+  /* Live feed: one card per event instead of a 6-column grid */
+  .feed { height: calc(100vh - 250px); padding: 4px; }
+  .event {
+    display: block;
+    padding: 9px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .event .time { margin-right: 8px; }
+  .event .service { margin-right: 8px; }
+  .event .type { margin-right: 8px; }
+  .event .ip { display: inline-block; margin-right: 8px; }
+  .event .badge { display: inline-block; }
+  .event .details { display: block; margin-top: 2px; }
+
+  /* History table becomes stacked cards driven by data-label */
+  .table-scroll { max-height: none; border: 0; border-radius: 0; overflow: visible; }
+  #hist-table, #hist-table tbody, #hist-table tr, #hist-table td { display: block; width: 100%; }
+  #hist-table thead { display: none; }
+  #hist-table tr {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 10px;
+    padding: 6px 4px;
+  }
+  #hist-table td {
+    border: 0;
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 8px;
+    padding: 4px 10px;
+    text-align: left !important;
+  }
+  #hist-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  #hist-table td:empty { display: none; }
+  #hist-table td:last-child { max-width: none; }
+
+  /* Sessions: list first, transcript replaces it once one is picked */
+  .split { gap: 10px; }
+  .session-list { height: auto; max-height: calc(100vh - 230px); }
+  .session-list-header { flex-wrap: wrap; gap: 6px; }
+  .session-list-header select { flex: 1 1 100%; font-size: 16px; padding: 8px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; }
+  #sessions li { padding: 12px; }
+  .session-view { height: auto; min-height: 50vh; }
+  .terminal { font-size: 12px; min-height: 40vh; }
+  .mobile-only { display: inline-block; }
+  #sessions-back { margin-bottom: 8px; align-self: flex-start; }
+  /* Only one pane visible at a time */
+  body.session-open .session-list { display: none; }
+  body:not(.session-open) .session-view { display: none; }
+
+  /* Services */
+  .services-grid { grid-template-columns: 1fr; }
+  .add-service { flex-direction: column; align-items: stretch; }
+  .add-service label { width: 100%; }
+  .add-service input, .add-service select { width: 100%; font-size: 16px; padding: 9px; }
+  .add-service button { width: 100%; min-height: 44px; }
+
+  /* Stats */
+  .cards { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .card { padding: 12px; }
+  .card .value { font-size: 22px; }
+  .charts canvas { height: auto; }
+  th, td { padding: 8px; font-size: 12px; }
+
+  #config-editor { height: 55vh; font-size: 12px; }
+
+  /* Comfortable tap targets */
+  button, .switch { min-height: 38px; }
+  .ghost { padding: 9px 14px; }
+}
+
+@media (max-width: 400px) {
+  .cards { grid-template-columns: 1fr; }
+  .brand .muted { display: none; }
+  #hist-table td { grid-template-columns: 80px 1fr; }
 }

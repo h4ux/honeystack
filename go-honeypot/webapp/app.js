@@ -327,8 +327,14 @@
   $$('.tab').forEach((btn) => btn.addEventListener('click', () => selectTab(btn.dataset.tab)));
   function selectTab(tab) {
     state.currentTab = tab;
+    if (tab !== 'sessions') document.body.classList.remove('session-open');
     $$('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     $$('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === 'tab-' + tab));
+    // Keep the active tab visible in the scrollable strip on phones.
+    const activeTab = $(`.tab[data-tab="${tab}"]`);
+    if (activeTab && activeTab.scrollIntoView) {
+      activeTab.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    }
     if (tab === 'sessions') refreshSessions();
     if (tab === 'history') initHistory();
     if (tab === 'services') refreshServices();
@@ -449,6 +455,9 @@
     } catch (err) { console.warn(err); }
   }
   async function openSession(id) {
+    // On phones the list and the transcript share the screen; opening a
+    // session swaps the panes (see body.session-open in the stylesheet).
+    document.body.classList.add('session-open');
     try {
       const s = await send('get_session', { id });
       $('#session-meta').innerHTML = `
@@ -654,6 +663,12 @@
   const sessFilter = $('#session-service-filter');
   if (sessFilter) sessFilter.addEventListener('change', refreshSessions);
 
+  const sessBack = $('#sessions-back');
+  if (sessBack) sessBack.addEventListener('click', () => {
+    document.body.classList.remove('session-open');
+    state.selectedSession = null;
+  });
+
   // ---- History ----
   let historyRows = [];
   let historyInit = false;
@@ -711,13 +726,13 @@
     for (const e of historyRows) {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${escape(new Date(e.ts).toLocaleString())}</td>
-        <td>${escape(e.service || '')}</td>
-        <td>${escape(e.type || '')}</td>
-        <td>${escape(e.remoteIp || '')}${e.remotePort ? ':' + e.remotePort : ''}</td>
-        <td>${escape(e.username || '')}</td>
-        <td>${escape(e.password || '')}</td>
-        <td>${escape(detailText(e))}</td>
+        <td data-label="Time">${escape(new Date(e.ts).toLocaleString())}</td>
+        <td data-label="Service">${escape(e.service || '')}</td>
+        <td data-label="Type">${escape(e.type || '')}</td>
+        <td data-label="Source">${escape(e.remoteIp || '')}${e.remotePort ? ':' + e.remotePort : ''}</td>
+        <td data-label="User">${escape(e.username || '')}</td>
+        <td data-label="Password">${escape(e.password || '')}</td>
+        <td data-label="Detail">${escape(detailText(e))}</td>
       `;
       if (e.sessionId) {
         tr.style.cursor = 'pointer';

@@ -21,7 +21,10 @@ The daemon prints a fresh auth key on every start:
 ```
 
 Open the webapp, paste **host + port + key**, hit Connect, and you have
-Live, History, Sessions, Services, Config, and Stats tabs.
+Live, History, Sessions, Services, Config, and Stats tabs. The layout is
+responsive: on phones the tab strip scrolls horizontally, the history
+table becomes stacked cards, and the session list and transcript swap
+places instead of sitting side by side.
 
 ## History and reports
 

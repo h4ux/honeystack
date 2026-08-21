@@ -45,9 +45,10 @@ sessions to the browser just to hide most of them.
 settings, and the traffic it has actually attracted: events, unique
 source IPs, credential attempts, grants, and the last hit.
 
-**Stats** — ten KPI tiles (events retained, last 24 h, last hour, unique
-attackers, credential attempts, grants and accept rate, fake shell
-sessions, open/retained sessions, busiest service, peak hour) followed by
+**Stats** — thirteen KPI tiles (events retained, last 24 h, last hour,
+unique attackers, credential attempts, grants and accept rate, fake shell
+sessions, open/retained sessions, busiest service, peak hour, **uptime
+this run**, **first hit after start**, countries seen) followed by
 colour-coded charts:
 
 | Chart | What it plots |
@@ -67,6 +68,28 @@ table and rankings for source IPs, services, credentials, usernames,
 passwords, commands, requested HTTP paths, and client fingerprints
 (user agents / protocol version strings), plus source countries with
 their unique-IP counts.
+
+### This run vs. everything retained
+
+The event ring is rehydrated from `events.ndjson` on boot, so most
+counters describe traffic from previous runs too. These separate the
+current run out:
+
+- **Uptime this run** — ticks live, with the daemon's start time
+  underneath, and repeated in the window line above the tiles.
+- **First hit after start** — how long the box sat untouched before the
+  first *inbound* event, which service it landed on, and how many hits
+  the run has seen. The daemon's own startup bookkeeping (`startup`,
+  `service_started`, …) does not count as a hit, so this measures real
+  exposure time. Until something arrives it reads `waiting`, counting up.
+- **Per-service breakdown** gains *This run* (events since start) and
+  *1st hit after start* (`+2m 14s`, or `not yet · <how long quiet>` for a
+  listener nothing has touched yet).
+
+All three are in the PDF report as well. The API exposes them as
+`startedAt`, `uptimeMs`, `eventsSinceStart`, `trafficSinceStart`,
+`firstEventSinceStart`, `timeToFirstEventMs`, `firstEventService`, and
+per service `eventsSinceStart` / `firstSinceStart` / `timeToFirstMs`.
 
 ## History and reports
 

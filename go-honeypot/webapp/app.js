@@ -1028,6 +1028,22 @@
       { label: 'Busiest service', value: busiest ? busiest.key : '—', sub: busiest ? `${num(busiest.count)} events` : 'no traffic yet', text: true },
       { label: 'Peak hour (UTC)', value: s.peakHour || '—', sub: s.peakHourCount ? `${num(s.peakHourCount)} events in that hour` : 'last 24h', text: true },
       {
+        label: 'Uptime this run',
+        value: s.startedAt ? durationMs(Date.now() - s.startedAt) : '—',
+        sub: s.startedAt ? 'started ' + shortStamp(s.startedAt) : 'server did not report a start time',
+        text: true,
+        live: 'uptime'
+      },
+      {
+        label: 'First hit after start',
+        value: s.timeToFirstEventMs >= 0 ? '+' + durationMs(s.timeToFirstEventMs) : 'waiting',
+        sub: s.timeToFirstEventMs >= 0
+          ? `${s.firstEventService || 'unknown'} · ${shortStamp(s.firstEventSinceStart)} · ${num(s.trafficSinceStart != null ? s.trafficSinceStart : s.eventsSinceStart)} hits this run`
+          : (s.startedAt ? 'nothing has hit this run yet (' + durationMs(Date.now() - s.startedAt) + ' so far)' : 'no data'),
+        text: true,
+        live: s.timeToFirstEventMs >= 0 ? null : 'waiting'
+      },
+      {
         label: 'Countries seen',
         value: (s.topCountries || []).length,
         sub: (s.topCountries || [])[0]
@@ -1037,7 +1053,7 @@
       }
     ];
     $('#stats-cards').innerHTML = cards.map((c, i) => `
-      <div class="card ${CARD_COLORS[i % CARD_COLORS.length]}">
+      <div class="card ${CARD_COLORS[i % CARD_COLORS.length]}"${c.live ? ` data-live="${c.live}"` : ''}>
         <div class="label">${escape(c.label)}</div>
         <div class="value">${c.text ? escape(String(c.value)) : num(c.value)}</div>
         <div class="sub">${escape(c.sub)}</div>
@@ -1049,7 +1065,10 @@
     const range = s.firstEventTs && s.lastEventTs
       ? `${shortStamp(s.firstEventTs)} → ${shortStamp(s.lastEventTs)}`
       : 'no events yet';
-    $('#stats-window').innerHTML = `Retained window: <b>${escape(range)}</b> · all counters cover the memory ring plus whatever was replayed from <code>events.ndjson</code>.`;
+    const runLine = s.startedAt
+      ? ` · this run started <b>${escape(shortStamp(s.startedAt))}</b> (<span id="stats-uptime">${escape(durationMs(Date.now() - s.startedAt))}</span> ago) with <b>${num(s.trafficSinceStart != null ? s.trafficSinceStart : s.eventsSinceStart)}</b> inbound events since`
+      : '';
+    $('#stats-window').innerHTML = `Retained window: <b>${escape(range)}</b> · all counters cover the memory ring plus whatever was replayed from <code>events.ndjson</code>${runLine}.`;
     $('#stats-peak').textContent = s.peakHour ? `busiest hour ${s.peakHour} UTC (${num(s.peakHourCount)})` : '';
 
     drawStatsCharts(s, timeline);
@@ -1077,6 +1096,8 @@
         <td>${serviceCell(r.service)}</td>
         <td>${r.port ? escape(String(r.port)) : '—'}</td>
         <td>${num(r.events)}</td>
+        <td>${num(r.eventsSinceStart)}</td>
+        <td>${firstHitCell(r, s.startedAt)}</td>
         <td>${num(r.uniqueIps)}</td>
         <td>${num(r.attempts)}</td>
         <td>${num(r.accepted)}</td>
@@ -1180,6 +1201,41 @@
   }
 
   function num(v) { return Number(v || 0).toLocaleString(); }
+
+  // Compact, human duration: 0s, 42s, 3m 07s, 5h 12m, 3d 4h.
+  function durationMs(ms) {
+    const total = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+    if (total < 60) return total + 's';
+    const m = Math.floor(total / 60), sec = total % 60;
+    if (m < 60) return `${m}m ${String(sec).padStart(2, '0')}s`;
+    const h = Math.floor(m / 60), min = m % 60;
+    if (h < 24) return `${h}h ${String(min).padStart(2, '0')}m`;
+    const d = Math.floor(h / 24);
+    return `${d}d ${h % 24}h`;
+  }
+
+  // "+2m 14s" once a listener has been touched this run, otherwise how long
+  // it has been quiet since the daemon started.
+  function firstHitCell(row, startedAt) {
+    if (row.timeToFirstMs != null && row.timeToFirstMs >= 0) {
+      const when = row.firstSinceStart ? shortStamp(row.firstSinceStart) : '';
+      return `<span title="${escape(when)}">+${escape(durationMs(row.timeToFirstMs))}</span>`;
+    }
+    const quiet = startedAt ? durationMs(Date.now() - startedAt) : '';
+    return `<span class="muted" title="no traffic on this listener since the daemon started">not yet${quiet ? ' · ' + escape(quiet) : ''}</span>`;
+  }
+
+  // The uptime tiles count in real time instead of freezing at render time.
+  setInterval(() => {
+    if (state.currentTab !== 'stats' || !state.stats || !state.stats.startedAt) return;
+    const elapsed = durationMs(Date.now() - state.stats.startedAt);
+    const upCard = $('#stats-cards .card[data-live="uptime"] .value');
+    if (upCard) upCard.textContent = elapsed;
+    const waitCard = $('#stats-cards .card[data-live="waiting"] .sub');
+    if (waitCard) waitCard.textContent = `nothing has hit this run yet (${elapsed} so far)`;
+    const inline = $('#stats-uptime');
+    if (inline) inline.textContent = elapsed;
+  }, 1000);
   function svcIcon(name, size) {
     return window.ServiceIcons ? ServiceIcons.svg(name, size || 14) : '';
   }
@@ -1468,6 +1524,11 @@
       ['Commands captured', num(stats.commands)],
       ['Sessions (open / retained)', `${num(stats.activeSessions)} / ${num(stats.totalSessions)}`],
       ['Countries seen', String((stats.topCountries || []).length)],
+      ['This run started', stats.startedAt ? `${shortStamp(stats.startedAt)} (up ${durationMs(stats.uptimeMs)})` : '-'],
+      ['Events this run', `${num(stats.eventsSinceStart)} logged, ${num(stats.trafficSinceStart)} inbound`],
+      ['First hit after start', stats.timeToFirstEventMs >= 0
+        ? `+${durationMs(stats.timeToFirstEventMs)} (${stats.firstEventService || '?'} at ${shortStamp(stats.firstEventSinceStart)})`
+        : 'nothing yet'],
       ['Server build', state.build ? `${state.build.version || '?'} (${(state.build.commit || '').slice(0, 7)})` : 'unknown']
     ];
     doc.table(['Metric', 'Value'], summary, [230, 200], 9.5);
@@ -1513,11 +1574,13 @@
     };
 
     section('Per-service breakdown',
-      ['Service', 'Port', 'Events', 'IPs', 'Logins', 'Granted', 'Cmds', 'Last hit'],
+      ['Service', 'Port', 'Events', 'Run', '1st hit', 'IPs', 'Logins', 'Granted', 'Cmds', 'Last hit'],
       (stats.serviceStats || []).map((r) => [
-        r.service, r.port || '', r.events, r.uniqueIps, r.attempts, r.accepted, r.commands,
+        r.service, r.port || '', r.events, r.eventsSinceStart,
+        r.timeToFirstMs >= 0 ? '+' + durationMs(r.timeToFirstMs) : 'not yet',
+        r.uniqueIps, r.attempts, r.accepted, r.commands,
         r.lastSeen ? shortStamp(r.lastSeen) : ''
-      ]), [86, 40, 54, 44, 50, 54, 44, 118]);
+      ]), [72, 36, 44, 34, 52, 34, 44, 46, 36, 96]);
     section('Top source IPs', ['IP', 'Country', 'Events'],
       (stats.topIps || []).map((r) => {
         const loc = geoOf({ remoteIp: r.key }) || {};

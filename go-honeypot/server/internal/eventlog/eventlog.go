@@ -57,23 +57,37 @@ type Session struct {
 // everything still retained (memory ring + whatever was replayed from
 // events.ndjson), so they grow until the ring wraps.
 type Stats struct {
-	Total          int     `json:"total"`
-	Last24h        int     `json:"last24h"`
-	LastHour       int     `json:"lastHour"`
-	UniqueIPs      int     `json:"uniqueIps"`
-	UniqueIPs24h   int     `json:"uniqueIps24h"`
-	ActiveSessions int     `json:"activeSessions"`
-	TotalSessions  int     `json:"totalSessions"`
-	ShellSessions  int     `json:"shellSessions"`
-	Commands       int     `json:"commands"`
-	Attempts       int     `json:"attempts"`
-	Accepted       int     `json:"accepted"`
-	Rejected       int     `json:"rejected"`
-	FirstEventTS   int64   `json:"firstEventTs"`
-	LastEventTS    int64   `json:"lastEventTs"`
-	EventsPerMin   float64 `json:"eventsPerMin"`
-	PeakHour       string  `json:"peakHour"`
-	PeakHourCount  int     `json:"peakHourCount"`
+	Total          int   `json:"total"`
+	Last24h        int   `json:"last24h"`
+	LastHour       int   `json:"lastHour"`
+	UniqueIPs      int   `json:"uniqueIps"`
+	UniqueIPs24h   int   `json:"uniqueIps24h"`
+	ActiveSessions int   `json:"activeSessions"`
+	TotalSessions  int   `json:"totalSessions"`
+	ShellSessions  int   `json:"shellSessions"`
+	Commands       int   `json:"commands"`
+	Attempts       int   `json:"attempts"`
+	Accepted       int   `json:"accepted"`
+	Rejected       int   `json:"rejected"`
+	FirstEventTS   int64 `json:"firstEventTs"`
+	LastEventTS    int64 `json:"lastEventTs"`
+
+	// This run, as opposed to everything retained: the ring is rehydrated
+	// from events.ndjson on boot, so most counters above can describe
+	// traffic from previous runs.
+	StartedAt            int64 `json:"startedAt"`
+	UptimeMs             int64 `json:"uptimeMs"`
+	EventsSinceStart     int   `json:"eventsSinceStart"`
+	TrafficSinceStart    int   `json:"trafficSinceStart"`
+	FirstEventSinceStart int64 `json:"firstEventSinceStart,omitempty"`
+	// Milliseconds from daemon start to the first *inbound* event of this
+	// run; -1 while nothing has arrived yet. The daemon's own startup
+	// bookkeeping does not count as traffic.
+	TimeToFirstEventMs int64   `json:"timeToFirstEventMs"`
+	FirstEventService  string  `json:"firstEventService,omitempty"`
+	EventsPerMin       float64 `json:"eventsPerMin"`
+	PeakHour           string  `json:"peakHour"`
+	PeakHourCount      int     `json:"peakHourCount"`
 
 	ByService []KV `json:"byService"`
 	ByType    []KV `json:"byType"`
@@ -130,7 +144,15 @@ type ServiceStat struct {
 	Attempts  int    `json:"attempts"`
 	Accepted  int    `json:"accepted"`
 	Commands  int    `json:"commands"`
+	FirstSeen int64  `json:"firstSeen,omitempty"`
 	LastSeen  int64  `json:"lastSeen"`
+
+	// Per-listener view of this run only.
+	EventsSinceStart int   `json:"eventsSinceStart"`
+	FirstSinceStart  int64 `json:"firstSinceStart,omitempty"`
+	// Milliseconds from daemon start until this listener's first hit of
+	// the run; -1 while it has not been touched yet.
+	TimeToFirstMs int64 `json:"timeToFirstMs"`
 }
 
 type KV struct {
@@ -172,6 +194,16 @@ type Store struct {
 
 	geoMu sync.RWMutex
 	geo   Geo
+
+	// "Since start" bookkeeping. Replayed events never pass through Log,
+	// so counting there is what separates this run from history.
+	startedAt         int64
+	firstSinceStart   int64
+	firstSinceService string
+	eventsSinceStart  int
+	trafficSinceStart int
+	svcFirstSince     map[string]int64
+	svcEventsSince    map[string]int
 }
 
 // SetGeo attaches (or clears) the country resolver.
@@ -228,13 +260,16 @@ func New(logPath string, maxRows int) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{
-		max:      maxRows,
-		sessions: map[string]*Session{},
-		file:     f,
-		writer:   bufio.NewWriter(f),
-		flushCh:  make(chan struct{}, 1),
-		closeCh:  make(chan struct{}),
-		subs:     map[uint64]Subscriber{},
+		max:            maxRows,
+		sessions:       map[string]*Session{},
+		file:           f,
+		writer:         bufio.NewWriter(f),
+		flushCh:        make(chan struct{}, 1),
+		closeCh:        make(chan struct{}),
+		subs:           map[uint64]Subscriber{},
+		startedAt:      time.Now().UnixMilli(),
+		svcFirstSince:  map[string]int64{},
+		svcEventsSince: map[string]int{},
 	}
 	// Rehydrate from the NDJSON log so a dashboard that connects after a
 	// restart still sees history, not just events since the daemon booted.
@@ -364,6 +399,20 @@ func (s *Store) Log(e Event) Event {
 	s.mu.Lock()
 	s.nextID++
 	e.ID = s.nextID
+	s.eventsSinceStart++
+	if !isOwnBookkeeping(e) {
+		s.trafficSinceStart++
+		if s.firstSinceStart == 0 {
+			s.firstSinceStart = e.TS
+			s.firstSinceService = e.Service
+		}
+	}
+	if e.Service != "" {
+		if _, seen := s.svcFirstSince[e.Service]; !seen {
+			s.svcFirstSince[e.Service] = e.TS
+		}
+		s.svcEventsSince[e.Service]++
+	}
 	s.events = append(s.events, e)
 	if len(s.events) > s.max {
 		s.events = s.events[len(s.events)-s.max:]
@@ -619,6 +668,7 @@ func (s *Store) Range() (int64, int64) {
 type serviceAgg struct {
 	events       int
 	commands     int
+	firstSeen    int64
 	authAttempt  int
 	loginAttempt int
 	authSuccess  int
@@ -638,6 +688,28 @@ func (a *serviceAgg) attempts() int {
 		n += a.authSuccess
 	}
 	return n
+}
+
+// isOwnBookkeeping reports whether an event is the daemon talking about
+// itself (startup, listeners coming up or failing) rather than something
+// that arrived over the network. "Time to first hit" means first real
+// traffic, so these do not count.
+func isOwnBookkeeping(e Event) bool {
+	if e.Service == "system" {
+		return true
+	}
+	switch e.Type {
+	case "startup", "shutdown", "service_started", "service_stopped", "service_error", "server_error":
+		return true
+	}
+	return false
+}
+
+// StartedAt reports when this daemon run began (milliseconds).
+func (s *Store) StartedAt() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.startedAt
 }
 
 func (s *Store) Stats() Stats {
@@ -810,6 +882,9 @@ func (s *Store) Stats() Stats {
 			if e.TS > agg.lastSeen {
 				agg.lastSeen = e.TS
 			}
+			if agg.firstSeen == 0 || e.TS < agg.firstSeen {
+				agg.firstSeen = e.TS
+			}
 			if e.LocalPort > 0 {
 				agg.port = e.LocalPort
 			}
@@ -883,6 +958,20 @@ func (s *Store) Stats() Stats {
 	stats.UniqueIPs24h = len(seenIPs24)
 	stats.EventsPerMin = float64(stats.LastHour) / 60
 
+	stats.StartedAt = s.startedAt
+	stats.UptimeMs = now.UnixMilli() - s.startedAt
+	stats.EventsSinceStart = s.eventsSinceStart
+	stats.TrafficSinceStart = s.trafficSinceStart
+	stats.FirstEventSinceStart = s.firstSinceStart
+	stats.FirstEventService = s.firstSinceService
+	stats.TimeToFirstEventMs = -1
+	if s.firstSinceStart > 0 {
+		stats.TimeToFirstEventMs = s.firstSinceStart - s.startedAt
+		if stats.TimeToFirstEventMs < 0 {
+			stats.TimeToFirstEventMs = 0
+		}
+	}
+
 	stats.TotalSessions = len(s.sessions)
 	for _, sess := range s.sessions {
 		if sess.ClosedAt == 0 {
@@ -895,15 +984,27 @@ func (s *Store) Stats() Stats {
 	for name, agg := range svcAggs {
 		svcCount[name] = agg.events
 		stats.Attempts += agg.attempts()
+		timeToFirst := int64(-1)
+		firstSince := s.svcFirstSince[name]
+		if firstSince > 0 {
+			timeToFirst = firstSince - s.startedAt
+			if timeToFirst < 0 {
+				timeToFirst = 0
+			}
+		}
 		stats.Services = append(stats.Services, ServiceStat{
-			Service:   name,
-			Port:      agg.port,
-			Events:    agg.events,
-			UniqueIPs: len(agg.ips),
-			Attempts:  agg.attempts(),
-			Accepted:  agg.authSuccess,
-			Commands:  agg.commands,
-			LastSeen:  agg.lastSeen,
+			Service:          name,
+			Port:             agg.port,
+			Events:           agg.events,
+			UniqueIPs:        len(agg.ips),
+			Attempts:         agg.attempts(),
+			Accepted:         agg.authSuccess,
+			Commands:         agg.commands,
+			FirstSeen:        agg.firstSeen,
+			LastSeen:         agg.lastSeen,
+			EventsSinceStart: s.svcEventsSince[name],
+			FirstSinceStart:  firstSince,
+			TimeToFirstMs:    timeToFirst,
 		})
 	}
 	sort.Slice(stats.Services, func(i, j int) bool { return stats.Services[i].Events > stats.Services[j].Events })

@@ -48,12 +48,14 @@ gh repo create honeystack --public --source=. --remote=origin --push
 `.github/workflows/go-honeypot.yml` cross-compiles for Linux, macOS, and
 Windows on every push to `main`, then publishes a `nightly` release.
 
-The earlier failure came from a module path mismatch: `go.mod` declared
+An earlier failure came from a module path mismatch: `go.mod` declared
 `github.com/h4ux/honeystack/...` while the sources still imported
 `github.com/example/honeypot/...`, so Go tried to clone a repository that
 does not exist. Both now agree on
-`github.com/h4ux/honeystack/go-honeypot/server`, and the workflow pins
-Go **1.24.4** instead of reading a `go 1.25.0` directive.
+`github.com/h4ux/honeystack/go-honeypot/server`.
+
+The workflow pins Go **1.26.7**, which satisfies the `go 1.25.0`
+directive that `golang.org/x/crypto` v0.52.0 forces.
 
 You can also run it by hand from the Actions tab (`workflow_dispatch`).
 
@@ -74,7 +76,7 @@ loader scripts are already in `index.html`.
 ```bash
 cd ~/honeystack/go-honeypot/server
 git pull            # or copy the new tree over
-sudo env GOTOOLCHAIN=local GOFLAGS= go build -o /usr/local/bin/honeypot .
+sudo env GOFLAGS= go build -o /usr/local/bin/honeypot .
 sudo systemctl restart honeypot-go
 ```
 

@@ -124,12 +124,14 @@ build_binary() {
     [[ -f "$SERVER_DIR/go.mod" ]] || die "Missing $SERVER_DIR/go.mod"
     [[ -d "$SERVER_DIR/internal" ]] || die "Missing $SERVER_DIR/internal — unpack the full zip, not just main.go"
     log "Building honeypot binary from $SERVER_DIR"
-    # Use the distro Go toolchain. Do not download Go 1.25 or fetch
-    # github.com/example/honeypot — this is a local module named "honeypot".
+    # go.mod requires Go >= 1.25 (golang.org/x/crypto v0.52.0), which is
+    # newer than the toolchain Ubuntu ships, so GOTOOLCHAIN stays on 'auto':
+    # the distro Go downloads the matching toolchain on first build. If the
+    # server has no outbound network, use USE_RELEASE=1 instead of compiling.
     (
       cd "$SERVER_DIR"
       export GO111MODULE=on
-      export GOTOOLCHAIN=local
+      export GOTOOLCHAIN=auto
       unset GOFLAGS || true
       if [[ -d vendor ]]; then
         go build -mod=vendor -o "$BIN_PATH" .

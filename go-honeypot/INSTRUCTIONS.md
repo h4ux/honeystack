@@ -10,6 +10,35 @@ network with an auth key printed at startup.
 > a second SSH session open while you run it in case anything goes
 > wrong.
 
+## 0. The quick path: `scripts/deploy-remote.sh`
+
+If you just want the honeypot up on a throwaway server, skip sections 1
+and 2. This script runs **on the server**, needs nothing but `curl`, and
+asks before each of its four steps — download the matching binary, move
+the real sshd to `1980`, install and start `honeypot-go.service`, and
+disable the host firewall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
+sudo bash deploy-remote.sh
+```
+
+Piping it works as well (prompts are read from `/dev/tty`), and `--yes`
+makes it unattended:
+
+```bash
+curl -fsSL .../deploy-remote.sh | sudo bash
+curl -fsSL .../deploy-remote.sh | sudo bash -s -- --yes
+```
+
+Everything lands in `/opt/honeystack` (`--dir` to change), runs as the
+`honeypot` system user, and the script prints the new SSH command, the
+control endpoint, and the auth key when it is done. Details and the full
+flag list: [README.md](./README.md#remote-deployment-in-one-command).
+
+Sections 3 onwards (reconnecting on the new SSH port, grabbing the auth
+key, TLS, troubleshooting) apply either way.
+
 ## 1. Copy the project to the server
 
 ```bash

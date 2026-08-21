@@ -26,6 +26,38 @@ responsive: on phones the tab strip scrolls horizontally, the history
 table becomes stacked cards, and the session list and transcript swap
 places instead of sitting side by side.
 
+## What the dashboard shows
+
+**Live** — the streaming event feed, with a counter strip above it
+(events in buffer, distinct source IPs, credential attempts, how many
+were granted, age of the last event, and a colour-coded chip per active
+service).
+
+**Services** — one card per listener with its state, port, fake-auth
+settings, and the traffic it has actually attracted: events, unique
+source IPs, credential attempts, grants, and the last hit.
+
+**Stats** — ten KPI tiles (events retained, last 24 h, last hour, unique
+attackers, credential attempts, grants and accept rate, fake shell
+sessions, open/retained sessions, busiest service, peak hour) followed by
+colour-coded charts:
+
+| Chart | What it plots |
+|---|---|
+| Activity, last 24 h | hourly events, credential attempts, grants, unique IPs |
+| Events by service | donut with per-service colours and shares |
+| Event types | ranked bars, coloured by event kind |
+| Noisiest source IPs | ranked bars |
+| Targeted ports | ranked bars, `port/service` |
+| Daily volume | one bar per day, last 14 days |
+| When the scanning happens | weekday x hour heatmap (UTC) |
+
+Charts are canvas-drawn, hover for exact values, repaint on resize, and
+carry no third-party dependency. Below them: a per-service breakdown
+table and rankings for source IPs, services, credentials, usernames,
+passwords, commands, requested HTTP paths, and client fingerprints
+(user agents / protocol version strings).
+
 ## History and reports
 
 - **History tab** — query everything the daemon retains, not just events
@@ -36,10 +68,12 @@ places instead of sitting side by side.
   into memory, so connecting after a restart still shows prior activity.
   `storage.maxLogRows` caps how much is kept in memory.
 - **PDF report** — the Stats tab (and the History toolbar) generates a
-  multi-page PDF with the summary metrics, both charts as images, top
-  IPs, services, event types, credentials, commands, and an event table.
-  It is produced in the browser with no dependencies, so it works on the
-  Vercel-hosted dashboard too.
+  multi-page PDF: twelve summary metrics, all seven charts repainted
+  light-themed at print resolution, the per-service breakdown, and
+  rankings for IPs, services, event types, ports, credentials,
+  usernames, passwords, commands, HTTP paths and client fingerprints,
+  followed by an event table. It is produced in the browser with no
+  dependencies, so it works on the Vercel-hosted dashboard too.
 
 ## Feature parity with the Node version
 
@@ -175,6 +209,84 @@ If the repo has a `git remote origin` pointing at GitHub, `--repo` is
 optional. For private repos or Actions artifacts, export `GITHUB_TOKEN`
 or `GH_TOKEN` (or run `gh auth login`).
 
+## Remote deployment in one command
+
+`scripts/deploy-remote.sh` is meant to be run **on the server** — including
+straight off the internet — and it **asks before every change**:
+
+1. **Pick the right binary.** Detects the machine's OS and CPU, finds the
+   matching `honeypot-<os>-<arch>` asset in the GitHub release, verifies
+   its SHA-256 against the published `SHA256SUMS`, installs it to
+   `/usr/local/bin/honeypot`, and drops `config.default.json` /
+   `config.json` into the install root.
+2. **Move the real sshd to port 1980.** Backs up `sshd_config`, rewrites
+   `Port` (including `sshd_config.d/*.conf` drop-ins and socket-activated
+   `ssh.socket` on newer Ubuntu), validates with `sshd -t` and restores
+   the backup if that fails, restarts sshd, confirms it is listening, and
+   waits for you to prove a new session works before going on.
+3. **Install and start the service.** Creates the `honeypot` system
+   account, `<dir>/data`, and a `honeypot-go.service` unit that grants
+   only `CAP_NET_BIND_SERVICE`, then enables and starts it.
+4. **Disable the host firewall.** A honeypot is only useful if the decoy
+   ports answer, so this turns `ufw` / `firewalld` off, sets the iptables
+   policies to ACCEPT and (if you agree) flushes nftables. Decline it and
+   it offers to open just the needed ports in `ufw` instead.
+
+```bash
+# download first, then run — you can read it before it touches anything
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
+sudo bash deploy-remote.sh
+```
+
+```bash
+# or pipe it straight in; prompts are read from /dev/tty, so they still work
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash
+```
+
+```bash
+# unattended: answer yes to everything
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash -s -- --yes
+```
+
+Flags:
+
+| Flag | Meaning |
+|---|---|
+| `-y`, `--yes` | assume yes for every question (needed when there is no terminal) |
+| `--repo OWNER/NAME` | repo to download from (default `h4ux/honeystack`) |
+| `--tag TAG` | release tag (default `nightly`; falls back to the newest release) |
+| `--binary PATH` | install a local binary instead of downloading |
+| `--ssh-port N` | port the real sshd moves to (default `1980`) |
+| `--control-port N` | control API port (default `9090`) |
+| `--dir PATH` | install root (default `/opt/honeystack`) |
+| `--user NAME` | system account that runs the daemon (default `honeypot`) |
+| `--skip-binary`, `--skip-ssh`, `--skip-service`, `--skip-firewall` | leave that step alone |
+
+The script needs the `nightly` release to exist, which happens after the
+first successful `go-honeypot` workflow run on `main`. Until then, build
+locally and hand it the file:
+
+```bash
+cd go-honeypot/server && CGO_ENABLED=0 go build -o /tmp/honeypot .
+scp /tmp/honeypot user@server:/tmp/honeypot
+sudo bash deploy-remote.sh --binary /tmp/honeypot
+```
+
+It finishes by printing the SSH command for the new port, the control
+endpoint, the auth key, how to connect the dashboard, and how to undo
+everything:
+
+```bash
+sudo systemctl disable --now honeypot-go
+sudo cp /etc/ssh/sshd_config.honeystack-backup.* /etc/ssh/sshd_config
+sudo systemctl restart ssh
+sudo ufw enable          # if the firewall was disabled
+```
+
+Only run this on a throwaway host: after step 4 nothing on the machine is
+filtered, including the real sshd on port 1980 — keep key-only auth on.
+Cloud security groups are separate and still have to be opened by hand.
+
 ## Ubuntu deployment
 
 See [INSTRUCTIONS.md](./INSTRUCTIONS.md). One-liner:
@@ -286,6 +398,8 @@ go-honeypot/
 │   ├── index.html
 │   ├── style.css
 │   ├── app.js
+│   ├── charts.js             canvas charts (timeline, donut, bars, heatmap)
+│   ├── pdf.js                in-browser PDF report writer
 │   └── serve.js              zero-dep static server for local hosting
 ├── scripts/
 │   ├── install.sh            download the binary for this OS (Linux/macOS)

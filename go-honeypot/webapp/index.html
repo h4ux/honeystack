@@ -64,6 +64,7 @@
 
   <main hidden id="main">
     <section id="tab-live" class="tab-panel active">
+      <div id="live-strip" class="live-strip"></div>
       <div class="toolbar">
         <label>Filter service <select id="filter-service"><option value="">all</option></select></label>
         <label>Filter type <select id="filter-type"><option value="">all</option></select></label>
@@ -143,20 +144,55 @@
 
     <section id="tab-stats" class="tab-panel">
       <div class="toolbar">
-        <span class="muted">Aggregated over all retained events (memory ring + replayed <code>events.ndjson</code>).</span>
+        <span class="muted" id="stats-window">Aggregated over all retained events (memory ring + replayed <code>events.ndjson</code>).</span>
+        <button id="stats-refresh" class="ghost">Refresh</button>
         <button id="stats-pdf" class="primary">Download PDF report</button>
       </div>
       <div id="stats-cards" class="cards"></div>
-      <div class="charts">
-        <div>
-          <h3>Events by hour (UTC)</h3>
-          <canvas id="chart-hourly" width="640" height="180"></canvas>
+
+      <div class="chart-grid">
+        <div class="panel span-2">
+          <div class="panel-head">
+            <h3>Activity — last 24 hours</h3>
+            <span class="muted" id="stats-peak"></span>
+          </div>
+          <canvas id="chart-hourly"></canvas>
         </div>
-        <div>
-          <h3>Events by service</h3>
-          <canvas id="chart-service" width="640" height="180"></canvas>
+        <div class="panel">
+          <div class="panel-head"><h3>Events by service</h3></div>
+          <canvas id="chart-service"></canvas>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Event types</h3></div>
+          <canvas id="chart-types"></canvas>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Noisiest source IPs</h3></div>
+          <canvas id="chart-ips"></canvas>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Targeted ports</h3></div>
+          <canvas id="chart-ports"></canvas>
+        </div>
+        <div class="panel span-2">
+          <div class="panel-head"><h3>Daily volume — last 14 days</h3></div>
+          <canvas id="chart-daily"></canvas>
+        </div>
+        <div class="panel span-2">
+          <div class="panel-head"><h3>When the scanning happens</h3><span class="muted">weekday × hour, UTC</span></div>
+          <canvas id="chart-heatmap"></canvas>
         </div>
       </div>
+
+      <h3 class="section-title" id="stats-service-title">Per-service breakdown</h3>
+      <div class="table-scroll" id="stats-service-wrap">
+        <table id="stats-service-table">
+          <thead><tr><th>Service</th><th>Port</th><th>Events</th><th>Unique IPs</th><th>Cred. attempts</th><th>Granted</th><th>Commands</th><th>Last hit</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <h3 class="section-title">Attacker detail</h3>
       <div class="two-col">
         <div>
           <h3>Top source IPs</h3>
@@ -174,11 +210,28 @@
           <h3>Top commands</h3>
           <table id="stats-commands"><thead><tr><th>Command</th><th>Count</th></tr></thead><tbody></tbody></table>
         </div>
+        <div>
+          <h3>Top usernames</h3>
+          <table id="stats-users"><thead><tr><th>Username</th><th>Tries</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Top passwords</h3>
+          <table id="stats-passwords"><thead><tr><th>Password</th><th>Tries</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Requested HTTP paths</h3>
+          <table id="stats-paths"><thead><tr><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>Client fingerprints</h3>
+          <table id="stats-clients"><thead><tr><th>User agent / version</th><th>Hits</th></tr></thead><tbody></tbody></table>
+        </div>
       </div>
     </section>
   </main>
 
   <script src="pdf.js"></script>
+  <script src="charts.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

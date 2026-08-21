@@ -135,9 +135,48 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,
 th { color: var(--muted); font-weight: 500; background: var(--panel-2); }
 td:last-child { text-align: right; color: var(--warn); }
 
-.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 20px; }
-.charts h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.4px; }
-.charts canvas { width: 100%; height: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+/* ------------------------------------------------------------------
+   Stats: KPI cards, chart panels, live counter strip.
+   Charts are canvas elements that size themselves to their panel, so the
+   CSS only owns the box; charts.js owns the pixels.
+   ------------------------------------------------------------------ */
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 22px; }
+.chart-grid .span-2 { grid-column: span 2; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px 14px; box-shadow: var(--shadow); min-width: 0; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.panel-head h3 { margin: 0; color: var(--text); font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+.panel-head .muted { font-size: 11px; }
+.panel canvas { display: block; width: 100%; border-radius: 10px; }
+.section-title { margin: 22px 0 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
+
+/* Hover readout shared by every chart. */
+.chart-tip {
+  position: fixed; z-index: 200; pointer-events: none;
+  background: rgba(5,7,15,0.94); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 9px; font-size: 11.5px; line-height: 1.45;
+  font-family: var(--mono); box-shadow: var(--shadow); max-width: 320px;
+}
+
+/* Cards get a coloured top rule so the KPI row is scannable. */
+.card { position: relative; overflow: hidden; }
+.card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--accent); opacity: 0.9; }
+.card.c-blue::before   { background: linear-gradient(90deg, #6b8afd, #6bd2ff); }
+.card.c-mint::before   { background: linear-gradient(90deg, #7cf2c8, #9dff6b); }
+.card.c-amber::before  { background: linear-gradient(90deg, #ffcf6b, #ffa26b); }
+.card.c-rose::before   { background: linear-gradient(90deg, #ff6b8b, #ff6bd2); }
+.card.c-violet::before { background: linear-gradient(90deg, #b98bff, #6b8afd); }
+.card.c-cyan::before   { background: linear-gradient(90deg, #6bd2ff, #6bffe4); }
+.card .value { display: flex; align-items: baseline; gap: 6px; }
+.card .value .unit { font-size: 12px; font-weight: 500; color: var(--muted); }
+.card .sub { margin-top: 4px; color: var(--muted); font-size: 11.5px; font-family: var(--mono); }
+.card .spark { margin-top: 8px; display: block; width: 100%; }
+
+/* Live tab counter strip */
+.live-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; font-size: 12px; color: var(--muted); }
+.chip b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+.chip .sw { width: 8px; height: 8px; border-radius: 3px; background: var(--accent); }
 .add-service { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
 .add-service label { color: var(--muted); font-size: 12px; }
 .add-service input, .add-service select { display: block; margin-top: 4px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 6px 8px; border-radius: 8px; font-family: var(--mono); }
@@ -154,7 +193,9 @@ td:last-child { text-align: right; color: var(--warn); }
 
 @media (max-width: 900px) {
   .split { grid-template-columns: 1fr; }
-  .two-col, .charts { grid-template-columns: 1fr; }
+  .two-col { grid-template-columns: 1fr; }
+  .chart-grid { grid-template-columns: 1fr; }
+  .chart-grid .span-2 { grid-column: span 1; }
   .event { grid-template-columns: 70px 90px 110px 120px 1fr; }
 }
 
@@ -290,7 +331,12 @@ td:last-child { text-align: right; color: var(--warn); }
   .cards { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .card { padding: 12px; }
   .card .value { font-size: 22px; }
-  .charts canvas { height: auto; }
+  .chart-grid { grid-template-columns: 1fr; gap: 12px; }
+  .chart-grid .span-2 { grid-column: span 1; }
+  .panel { padding: 10px 10px 12px; }
+  #stats-service-wrap { overflow-x: auto; }
+  #stats-service-table { min-width: 620px; }
+  .chart-tip { display: none; }
   th, td { padding: 8px; font-size: 12px; }
 
   #config-editor { height: 55vh; font-size: 12px; }

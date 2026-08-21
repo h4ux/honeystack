@@ -8,7 +8,7 @@ Two implementations of the same multi-service honeypot:
 | Dashboard | Built into the process (`:8080`) | Separate webapp; talks to the binary over WebSocket |
 | Storage | SQLite (`data/honeypot.db`) | In-memory ring + `events.ndjson` |
 | Auth for the UI | HTTP basic (`admin` / `changeme`) | Per-run auth key printed at startup |
-| Deploy | `setup-ubuntu.sh` | `go-honeypot/setup-ubuntu.sh` |
+| Deploy | `setup-ubuntu.sh` | `go-honeypot/scripts/deploy-remote.sh` (curl-able, step-by-step) or `go-honeypot/setup-ubuntu.sh` |
 
 Both emulate **SSH, Telnet, FTP, HTTP, RDP, MySQL, VNC, SMB, Redis,
 and PostgreSQL**. The Go edition additionally covers **ClickHouse
@@ -193,9 +193,20 @@ Open <http://127.0.0.1:5173>, fill in:
 - **Port:** `9090` (control API, not SSH)
 - **Auth key:** paste from the banner
 
-Click **Connect**. You get the same Live / SSH Sessions / Services /
-Config / Stats tabs as the Node dashboard. Config changes from the UI
-are pushed over the socket and the daemon starts/stops listeners live.
+Click **Connect**. You get Live / History / Sessions / Services / Config
+/ Stats tabs. Config changes from the UI are pushed over the socket and
+the daemon starts/stops listeners live.
+
+The Go dashboard's Stats tab is the detailed one: ten KPI tiles (events
+retained, last 24 h, last hour, unique attackers, credential attempts,
+grants + accept rate, fake shell sessions, sessions, busiest service,
+peak hour), seven colour-coded charts (24 h activity with attempts and
+grants overlaid, per-service donut, event types, noisiest IPs, targeted
+ports, 14-day volume, and a weekday-by-hour heatmap), a per-service
+breakdown table, and rankings for credentials, usernames, passwords,
+commands, HTTP paths, and client fingerprints. The Live tab carries a
+counter strip, the Services tab shows the traffic each listener drew, and
+the PDF report contains all of it.
 
 Build a binary instead of `go run`:
 
@@ -242,7 +253,45 @@ $env:GITHUB_REPO = 'owner/name'
 Private repos / Actions artifacts need `GITHUB_TOKEN`, `GH_TOKEN`, or
 `gh auth login`.
 
-## Ubuntu deployment (Go)
+## Remote deployment (Go, one command)
+
+`go-honeypot/scripts/deploy-remote.sh` deploys the honeypot onto a fresh
+Ubuntu/Debian server and **asks before every step**:
+
+1. picks the pre-built binary matching the server's OS/CPU, checks its
+   SHA-256, installs it to `/usr/local/bin/honeypot`
+2. moves the real sshd to port **1980** (backup + `sshd -t` fail-safe +
+   `ssh.socket` override + listener check)
+3. installs and starts the `honeypot-go` systemd service
+4. disables the host firewall so the decoy ports answer (or, if you
+   decline, just opens the ports it needs)
+
+Run it on the server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh -o deploy-remote.sh
+sudo bash deploy-remote.sh
+```
+
+Piping works too — prompts come from `/dev/tty`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/h4ux/honeystack/main/go-honeypot/scripts/deploy-remote.sh | sudo bash
+# unattended:
+curl -fsSL .../deploy-remote.sh | sudo bash -s -- --yes
+```
+
+Useful flags: `--ssh-port`, `--control-port`, `--dir`, `--user`,
+`--repo`, `--tag`, `--binary /path/to/honeypot` (skip the download), and
+`--skip-binary` / `--skip-ssh` / `--skip-service` / `--skip-firewall`.
+Full write-up, including how to undo it:
+[go-honeypot/README.md](./go-honeypot/README.md#remote-deployment-in-one-command).
+
+Note: the download needs the `nightly` release, which appears after the
+first successful `go-honeypot` CI run on `main`. Until then build the
+binary yourself and pass `--binary`.
+
+## Ubuntu deployment (Go, from a checkout)
 
 ```bash
 cd go-honeypot
@@ -298,9 +347,12 @@ go-honeypot/
 ├── webapp/                 remote dashboard (static HTML/JS)
 │   ├── index.html
 │   ├── app.js
+│   ├── charts.js           canvas charts for the stats tab
+│   ├── pdf.js              in-browser PDF report
 │   ├── style.css
 │   └── serve.js            `node serve.js` → http://127.0.0.1:5173
 ├── scripts/
+│   ├── deploy-remote.sh    guided server deploy (binary, sshd, service, firewall)
 │   ├── install.sh          download binary for this OS (Linux/macOS)
 │   ├── install.ps1         same for Windows PowerShell
 │   └── install.cmd

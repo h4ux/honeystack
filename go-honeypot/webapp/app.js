@@ -17,7 +17,10 @@
     reqSeq: 0,
     pending: new Map(),
     autoReconnect: true,
-    reconnectAttempts: 0
+    reconnectAttempts: 0,
+    stats: null,
+    statsAt: 0,
+    statsTimer: null
   };
 
   const $ = (s) => document.querySelector(s);
@@ -300,6 +303,7 @@
         state.events = msg.payload.events || [];
         for (const e of state.events) updateFilterOptions(e);
         rerenderFeed();
+        renderLiveStrip();
         if (state.currentTab === 'stats') renderStats(msg.payload.stats);
         break;
       case 'event':
@@ -317,6 +321,7 @@
     if (state.events.length > state.maxEvents) state.events.shift();
     updateFilterOptions(evt);
     renderNewEvent(evt);
+    if (state.currentTab === 'live') scheduleLiveStrip();
     if (state.currentTab === 'stats') refreshStats();
     if ((evt.type === 'authenticated' || evt.type === 'connection_closed' || evt.type === 'auth_success' || evt.type === 'connection') && state.currentTab === 'sessions') {
       refreshSessions();
@@ -335,22 +340,24 @@
     if (activeTab && activeTab.scrollIntoView) {
       activeTab.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
     }
+    if (tab === 'live') renderLiveStrip();
     if (tab === 'sessions') refreshSessions();
     if (tab === 'history') initHistory();
     if (tab === 'services') refreshServices();
     if (tab === 'config') loadConfig();
-    if (tab === 'stats') refreshStats();
+    if (tab === 'stats') refreshStats(true);
   }
 
   // ---- Live ----
   $('#paused').addEventListener('change', (e) => { state.paused = e.target.checked; });
-  $('#clear-feed').addEventListener('click', () => { state.events = []; $('#feed').innerHTML = ''; });
+  $('#clear-feed').addEventListener('click', () => { state.events = []; $('#feed').innerHTML = ''; renderLiveStrip(); });
   ['#filter-service', '#filter-type', '#filter-ip'].forEach((sel) =>
     $(sel).addEventListener('input', () => {
       state.filter.service = $('#filter-service').value;
       state.filter.type = $('#filter-type').value;
       state.filter.ip = $('#filter-ip').value.trim();
       rerenderFeed();
+      renderLiveStrip();
     })
   );
 
@@ -491,6 +498,8 @@
     try {
       state.services = await send('list_services', {});
       state.config = await send('get_config', {});
+      await refreshStats();
+      const traffic = new Map((state.stats?.serviceStats || []).map((r) => [r.service, r]));
       const grid = $('#services-grid');
       grid.innerHTML = '';
       for (const svc of state.services) {
@@ -499,9 +508,14 @@
         card.className = 'service-card';
         const status = svc.error ? '<span class="pill err">error</span>' : (svc.running ? '<span class="pill on">running</span>' : '<span class="pill off">stopped</span>');
         const isInteractive = ['ssh', 'telnet', 'ftp', 'http', 'redis', 'mysql'].includes(svc.name);
+        const t = traffic.get(svc.name);
         card.innerHTML = `
-          <h3>${escape(svc.name)}</h3>
+          <h3><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${window.Charts ? Charts.colorFor(svc.name, 0) : 'var(--accent)'};margin-right:7px;"></span>${escape(svc.name)}</h3>
           <div class="port">port ${escape(cfg.port ?? svc.port ?? '')} ${escape(cfg.protocol || 'tcp')}</div>
+          <div class="port" style="margin-top:6px;">${t
+            ? `${num(t.events)} events · ${num(t.uniqueIps)} IPs · ${num(t.attempts)} logins${t.accepted ? ' · ' + num(t.accepted) + ' granted' : ''}`
+            : 'no traffic recorded'}</div>
+          <div class="port">${t && t.lastSeen ? 'last hit ' + escape(shortStamp(t.lastSeen)) : ''}</div>
           <div class="row">
             <div>${status}${svc.error ? '<div class="muted" style="font-size:11px;margin-top:4px;">' + escape(svc.error) + '</div>' : ''}</div>
             <label class="switch"><input type="checkbox" ${cfg.enabled ? 'checked' : ''} data-svc="${escape(svc.name)}"><span class="slider"></span></label>
@@ -599,49 +613,246 @@
   }
 
   // ---- Stats ----
-  async function refreshStats() {
-    try {
-      const s = await send('get_stats', {});
-      renderStats(s);
-    } catch (err) { console.warn(err); }
-  }
-  function renderStats(s) {
-    const cards = [
-      ['Total events', s.total],
-      ['Last 24 hours', s.last24h],
-      ['Unique source IPs', s.uniqueIps],
-      ['Active sessions', s.activeSessions],
-      ['Fake access granted', s.accepted],
-      ['Auth attempts', s.rejected]
-    ];
-    $('#stats-cards').innerHTML = cards.map(([l, v]) => `<div class="card"><div class="label">${l}</div><div class="value">${v ?? 0}</div></div>`).join('');
-    drawBars('#chart-hourly', s.hourly || []);
-    drawBars('#chart-service', s.byService || []);
-    $('#stats-ips tbody').innerHTML = (s.topIps || []).map((r) => `<tr><td>${escape(r.key)}</td><td>${r.count}</td></tr>`).join('');
-    $('#stats-services tbody').innerHTML = (s.byService || []).map((r) => `<tr><td>${escape(r.key)}</td><td>${r.count}</td></tr>`).join('');
-    $('#stats-creds tbody').innerHTML = (s.topCreds || []).map((r) => `<tr><td>${escape(r.username || '')}</td><td>${escape(r.password || '')}</td><td>${r.count}</td></tr>`).join('');
-    $('#stats-commands tbody').innerHTML = (s.topCommands || []).map((r) => `<tr><td>${escape(r.key || '')}</td><td>${r.count}</td></tr>`).join('');
+  // The daemon recomputes the whole aggregate on every call, so a busy
+  // honeypot would otherwise re-render the tab per event.
+  const STATS_MIN_INTERVAL = 2000;
+  function refreshStats(force) {
+    const now = Date.now();
+    if (!force && now - state.statsAt < STATS_MIN_INTERVAL) {
+      if (!state.statsTimer) {
+        state.statsTimer = setTimeout(() => { state.statsTimer = null; refreshStats(true); },
+          STATS_MIN_INTERVAL - (now - state.statsAt));
+      }
+      return Promise.resolve(state.stats);
+    }
+    state.statsAt = now;
+    return send('get_stats', {})
+      .then((s) => {
+        state.stats = s;
+        if (state.currentTab === 'stats') renderStats(s);
+        return s;
+      })
+      .catch((err) => { console.warn(err); return null; });
   }
 
-  function drawBars(sel, rows) {
-    const canvas = $(sel);
-    if (!canvas || !canvas.getContext) return;
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-    if (!rows.length) return;
-    const max = Math.max(1, ...rows.map((r) => r.count || 0));
-    const barW = Math.max(4, (w - 20) / rows.length - 4);
-    rows.forEach((r, i) => {
-      const bh = ((r.count || 0) / max) * (h - 28);
-      const x = 10 + i * (barW + 4);
-      ctx.fillStyle = '#6b8afd';
-      ctx.fillRect(x, h - 16 - bh, barW, bh);
-      ctx.fillStyle = '#8892b8';
-      ctx.font = '10px sans-serif';
-      ctx.fillText(String(r.key || '').slice(0, 8), x, h - 4);
+  const CARD_COLORS = ['c-blue', 'c-cyan', 'c-mint', 'c-violet', 'c-amber', 'c-rose'];
+
+  function renderStats(s) {
+    if (!s || typeof s !== 'object') return;
+    state.stats = s;
+
+    const timeline = Array.isArray(s.timeline) && s.timeline.length
+      ? s.timeline
+      : (s.hourly || []).map((r) => ({ label: r.key, count: r.count, attempts: 0, accepted: 0, uniqueIps: 0 }));
+    const counts = timeline.map((b) => b.count || 0);
+    const attempts = s.attempts != null ? s.attempts : (s.rejected || 0);
+    const accepted = s.accepted || 0;
+    const acceptRate = attempts ? Math.round((accepted / attempts) * 100) : 0;
+    const busiest = (s.byService || [])[0];
+    const perHour = s.last24h ? Math.round(s.last24h / 24) : 0;
+    const perMin = s.eventsPerMin != null ? s.eventsPerMin : (s.lastHour || 0) / 60;
+
+    const cards = [
+      { label: 'Events retained', value: s.total, sub: s.firstEventTs ? 'oldest ' + shortStamp(s.firstEventTs) : 'nothing logged yet' },
+      { label: 'Last 24 hours', value: s.last24h, sub: `≈ ${num(perHour)}/hour`, spark: counts },
+      { label: 'Last hour', value: s.lastHour, sub: `${perMin.toFixed(perMin < 10 ? 1 : 0)} events/min` },
+      { label: 'Unique attackers', value: s.uniqueIps, sub: `${num(s.uniqueIps24h)} seen in last 24h` },
+      { label: 'Credential attempts', value: attempts, sub: `${num(s.rejected)} refused · ${num(accepted)} granted` },
+      { label: 'Fake access granted', value: accepted, sub: `${acceptRate}% of all attempts` },
+      { label: 'Shell sessions', value: s.shellSessions, sub: `${num(s.commands)} commands captured` },
+      { label: 'Open sessions', value: s.activeSessions, sub: `${num(s.totalSessions)} sessions retained` },
+      { label: 'Busiest service', value: busiest ? busiest.key : '—', sub: busiest ? `${num(busiest.count)} events` : 'no traffic yet', text: true },
+      { label: 'Peak hour (UTC)', value: s.peakHour || '—', sub: s.peakHourCount ? `${num(s.peakHourCount)} events in that hour` : 'last 24h', text: true }
+    ];
+    $('#stats-cards').innerHTML = cards.map((c, i) => `
+      <div class="card ${CARD_COLORS[i % CARD_COLORS.length]}">
+        <div class="label">${escape(c.label)}</div>
+        <div class="value">${c.text ? escape(String(c.value)) : num(c.value)}</div>
+        <div class="sub">${escape(c.sub)}</div>
+        ${c.spark ? '<canvas class="spark" data-spark="1"></canvas>' : ''}
+      </div>`).join('');
+    const spark = $('#stats-cards canvas[data-spark]');
+    if (spark && window.Charts) Charts.sparkline(spark, counts, { color: '#6bd2ff', height: 30 });
+
+    const range = s.firstEventTs && s.lastEventTs
+      ? `${shortStamp(s.firstEventTs)} → ${shortStamp(s.lastEventTs)}`
+      : 'no events yet';
+    $('#stats-window').innerHTML = `Retained window: <b>${escape(range)}</b> · all counters cover the memory ring plus whatever was replayed from <code>events.ndjson</code>.`;
+    $('#stats-peak').textContent = s.peakHour ? `busiest hour ${s.peakHour} UTC (${num(s.peakHourCount)})` : '';
+
+    drawStatsCharts(s, timeline);
+
+    tableRows('#stats-ips', s.topIps, (r) => [r.key, num(r.count)]);
+    tableRows('#stats-services', s.byService, (r) => [serviceCell(r.key), num(r.count)], true);
+    tableRows('#stats-creds', s.topCreds, (r) => [r.username || '—', r.password || '—', num(r.count)]);
+    tableRows('#stats-commands', s.topCommands, (r) => [r.key, num(r.count)]);
+    tableRows('#stats-users', s.topUsernames, (r) => [r.key, num(r.count)]);
+    tableRows('#stats-passwords', s.topPasswords, (r) => [r.key, num(r.count)]);
+    tableRows('#stats-paths', s.topPaths, (r) => [r.key, num(r.count)]);
+    tableRows('#stats-clients', s.topClients, (r) => [r.key, num(r.count)]);
+
+    const svcRows = s.serviceStats || [];
+    $('#stats-service-table tbody').innerHTML = svcRows.map((r) => `
+      <tr>
+        <td>${serviceCell(r.service)}</td>
+        <td>${r.port ? escape(String(r.port)) : '—'}</td>
+        <td>${num(r.events)}</td>
+        <td>${num(r.uniqueIps)}</td>
+        <td>${num(r.attempts)}</td>
+        <td>${num(r.accepted)}</td>
+        <td>${num(r.commands)}</td>
+        <td>${r.lastSeen ? escape(shortStamp(r.lastSeen)) : '—'}</td>
+      </tr>`).join('');
+    $('#stats-service-wrap').hidden = !svcRows.length;
+    $('#stats-service-title').hidden = !svcRows.length;
+  }
+
+  function drawStatsCharts(s, timeline) {
+    if (!window.Charts) return;
+    const C = window.Charts;
+
+    panel('#chart-hourly', timeline.length, (canvas) => {
+      C.timeline(canvas, {
+        rows: timeline.map((b) => b.label),
+        series: [
+          { label: 'all events', color: '#6b8afd', values: timeline.map((b) => b.count || 0) },
+          { label: 'credential attempts', color: '#ffcf6b', values: timeline.map((b) => b.attempts || 0), fill: false },
+          { label: 'access granted', color: '#7cf2c8', values: timeline.map((b) => b.accepted || 0), kind: 'bar' },
+          { label: 'unique IPs', color: '#b98bff', values: timeline.map((b) => b.uniqueIps || 0), fill: false }
+        ]
+      }, { theme: 'dark', aspect: 3.4, maxHeight: 300 });
+    });
+
+    panel('#chart-service', (s.byService || []).length, (canvas) => {
+      C.donut(canvas, (s.byService || []).map((r) => ({ label: r.key, value: r.count })), { theme: 'dark', centerLabel: 'events', maxHeight: 260 });
+    });
+
+    panel('#chart-types', (s.byType || []).length, (canvas) => {
+      C.hbars(canvas, (s.byType || []).slice(0, 9).map((r, i) => ({ label: r.key, value: r.count, color: typeColor(r.key, i) })), { theme: 'dark' });
+    });
+
+    panel('#chart-ips', (s.topIps || []).length, (canvas) => {
+      C.hbars(canvas, (s.topIps || []).slice(0, 9).map((r, i) => ({ label: r.key, value: r.count })), { theme: 'dark', labelWidth: 150 });
+    });
+
+    panel('#chart-ports', (s.topPorts || []).length, (canvas) => {
+      C.hbars(canvas, (s.topPorts || []).slice(0, 9).map((r) => {
+        const svc = String(r.key).split('/')[1] || '';
+        return { label: r.key, value: r.count, color: C.colorFor(svc, 0) };
+      }), { theme: 'dark', unit: 'events' });
+    });
+
+    panel('#chart-daily', (s.daily || []).length, (canvas) => {
+      C.bars(canvas, (s.daily || []).map((b) => ({ label: b.label, value: b.count, color: '#6bd2ff' })), { theme: 'dark', aspect: 3.6, maxHeight: 240 });
+    });
+
+    panel('#chart-heatmap', (s.heatmap && s.heatmap.max) ? 1 : 0, (canvas) => {
+      C.heatmap(canvas, s.heatmap, { theme: 'dark', height: 196 });
     });
   }
+
+  // Hide a chart's whole panel when the daemon has nothing to plot (or is
+  // an older build that does not send that series at all).
+  function panel(sel, hasData, draw) {
+    const canvas = $(sel);
+    if (!canvas) return;
+    const box = canvas.closest('.panel');
+    if (box) box.hidden = !hasData;
+    if (!hasData) return;
+    draw(canvas);
+  }
+
+  const TYPE_COLORS = {
+    auth_success: '#7cf2c8', authenticated: '#9dff6b', auth_attempt: '#ffcf6b',
+    login_attempt: '#ffa26b', command: '#6bd2ff', exec: '#6bffe4',
+    connection: '#6b8afd', connection_closed: '#8892b8', payload: '#b98bff',
+    query: '#d88bff', request: '#6bb8fd', datagram: '#c9b06b',
+    server_error: '#ff6b8b', handler_error: '#ff6b8b', service_error: '#ff6b8b'
+  };
+  function typeColor(key, i) { return TYPE_COLORS[key] || Charts.PALETTE[i % Charts.PALETTE.length]; }
+
+  function serviceCell(name) {
+    const color = window.Charts ? Charts.colorFor(name, 0) : 'var(--accent)';
+    return `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:6px;"></span>${escape(name)}`;
+  }
+
+  function tableRows(sel, rows, map, raw) {
+    const table = $(sel);
+    if (!table) return;
+    const list = rows || [];
+    const body = table.querySelector('tbody');
+    body.innerHTML = list.map((r) => '<tr>' + map(r).map((cell, i) =>
+      `<td>${raw && i === 0 ? cell : escape(String(cell))}</td>`).join('') + '</tr>').join('');
+    const holder = table.parentElement;
+    if (holder && holder.parentElement && holder.parentElement.classList.contains('two-col')) {
+      holder.hidden = !list.length;
+    }
+  }
+
+  function num(v) { return Number(v || 0).toLocaleString(); }
+  function shortStamp(ms) {
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return '—';
+    // Some locales put U+202F before AM/PM; the PDF fonts cannot show it.
+    return d.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      .replace(/[\u202f\u00a0]/g, ' ');
+  }
+
+  const statsRefreshBtn = $('#stats-refresh');
+  if (statsRefreshBtn) statsRefreshBtn.addEventListener('click', () => refreshStats(true));
+
+  // Canvas pixels are sized to the CSS box, so a resize needs a repaint.
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (state.currentTab !== 'stats' || !window.Charts) return;
+      $$('#tab-stats canvas').forEach((c) => Charts.redraw(c));
+    }, 200);
+  });
+
+  // ---- Live counter strip ----
+  let liveStripTimer = null;
+  function scheduleLiveStrip() {
+    if (liveStripTimer) return;
+    liveStripTimer = setTimeout(() => { liveStripTimer = null; renderLiveStrip(); }, 500);
+  }
+  function renderLiveStrip() {
+    const el = $('#live-strip');
+    if (!el) return;
+    const events = state.events || [];
+    const shown = events.filter(passesFilter);
+    const ips = new Set();
+    const svc = new Map();
+    let attempts = 0;
+    let granted = 0;
+    for (const e of events) {
+      if (e.remoteIp) ips.add(e.remoteIp);
+      if (e.service) svc.set(e.service, (svc.get(e.service) || 0) + 1);
+      if (e.type === 'auth_attempt' || e.type === 'login_attempt' || e.type === 'auth_success') attempts++;
+      if (e.type === 'auth_success') granted++;
+    }
+    const last = events.length ? events[events.length - 1].ts : 0;
+    const top = Array.from(svc.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const chips = [
+      chip('in buffer', `${num(shown.length)}${shown.length !== events.length ? ' / ' + num(events.length) : ''}`),
+      chip('source IPs', num(ips.size)),
+      chip('cred. attempts', num(attempts)),
+      chip('granted', num(granted)),
+      chip('last event', last ? ago(last) : '—')
+    ].concat(top.map(([name, count]) =>
+      `<span class="chip"><span class="sw" style="background:${window.Charts ? Charts.colorFor(name, 0) : 'var(--accent)'}"></span>${escape(name)} <b>${num(count)}</b></span>`));
+    el.innerHTML = chips.join('');
+  }
+  function chip(label, value) { return `<span class="chip">${escape(label)} <b>${escape(String(value))}</b></span>`; }
+  function ago(ts) {
+    const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (secs < 60) return secs + 's ago';
+    if (secs < 3600) return Math.round(secs / 60) + 'm ago';
+    if (secs < 86400) return Math.round(secs / 3600) + 'h ago';
+    return Math.round(secs / 86400) + 'd ago';
+  }
+  setInterval(() => { if (state.currentTab === 'live') renderLiveStrip(); }, 15000);
 
   const addForm = $('#add-service');
   if (addForm) addForm.addEventListener('submit', async (e) => {
@@ -818,25 +1029,53 @@
 
     doc.text('Summary', { size: 13, bold: true });
     doc.space(2);
+    const attempts = stats.attempts != null ? stats.attempts : (stats.rejected ?? 0);
     const summary = [
-      ['Total events retained', stats.total ?? 0],
-      ['Events last 24h', stats.last24h ?? 0],
-      ['Unique source IPs', stats.uniqueIps ?? 0],
-      ['Active sessions', stats.activeSessions ?? 0],
-      ['Fake access granted', stats.accepted ?? 0],
-      ['Authentication attempts', stats.rejected ?? 0]
+      ['Retained window', stats.firstEventTs
+        ? `${shortStamp(stats.firstEventTs)} -> ${shortStamp(stats.lastEventTs)}`
+        : 'no events'],
+      ['Total events retained', num(stats.total)],
+      ['Events last 24h', num(stats.last24h)],
+      ['Events last hour', num(stats.lastHour)],
+      ['Busiest hour (UTC)', stats.peakHour ? `${stats.peakHour} (${num(stats.peakHourCount)} events)` : '-'],
+      ['Unique source IPs', `${num(stats.uniqueIps)} (${num(stats.uniqueIps24h)} in last 24h)`],
+      ['Credential attempts', num(attempts)],
+      ['Fake access granted', `${num(stats.accepted)}${attempts ? ' (' + Math.round(((stats.accepted || 0) / attempts) * 100) + '% of attempts)' : ''}`],
+      ['Attempts refused', num(stats.rejected)],
+      ['Fake shell sessions', num(stats.shellSessions)],
+      ['Commands captured', num(stats.commands)],
+      ['Sessions (open / retained)', `${num(stats.activeSessions)} / ${num(stats.totalSessions)}`]
     ];
-    doc.table(['Metric', 'Value'], summary, [260, 90], 9.5);
+    doc.table(['Metric', 'Value'], summary, [230, 200], 9.5);
     doc.space(8);
 
-    for (const [heading, canvasSel] of [['Events by hour (UTC)', '#chart-hourly'], ['Events by service', '#chart-service']]) {
-      const canvas = $(canvasSel);
-      if (!canvas || !canvas.width) continue;
+    // The on-screen charts are dark; repaint the same data light-themed at
+    // print resolution so the report is readable on paper.
+    const REPORT_CHARTS = [
+      ['Activity - last 24 hours (UTC)', '#chart-hourly', 900, 265],
+      ['Events by service', '#chart-service', 900, 300],
+      ['Event types', '#chart-types', 900, 0],
+      ['Noisiest source IPs', '#chart-ips', 900, 0],
+      ['Targeted ports', '#chart-ports', 900, 0],
+      ['Daily volume - last 14 days', '#chart-daily', 900, 250],
+      ['When the scanning happens (weekday x hour, UTC)', '#chart-heatmap', 900, 250]
+    ];
+    for (const [heading, canvasSel, cw, ch] of REPORT_CHARTS) {
+      const live = $(canvasSel);
+      if (!live || !live.__chart) continue;
+      const flat = window.Charts ? Charts.offscreen(live, cw, ch || undefined) : null;
+      const canvas = flat || live;
+      if (!canvas.width) continue;
       const jpeg = jpegFromCanvas(canvas);
       if (!jpeg) continue;
-      doc.text(heading, { size: 12, bold: true });
       const w = PDF_PAGE.W - PDF_PAGE.MARGIN * 2;
-      doc.image(jpeg, w, w * (canvas.height / canvas.width), canvas.width, canvas.height);
+      const drawH = w * (canvas.height / canvas.width);
+      // Keep the heading with its chart instead of orphaning it at the
+      // bottom of the previous page.
+      if (doc.current.y - drawH - 30 < PDF_PAGE.MARGIN) doc.newPage();
+      doc.text(heading, { size: 12, bold: true });
+      doc.image(jpeg, w, drawH, canvas.width, canvas.height);
+      doc.space(4);
     }
 
     const section = (title, headers, data, widths) => {
@@ -848,16 +1087,32 @@
       doc.space(6);
     };
 
+    section('Per-service breakdown',
+      ['Service', 'Port', 'Events', 'IPs', 'Logins', 'Granted', 'Cmds', 'Last hit'],
+      (stats.serviceStats || []).map((r) => [
+        r.service, r.port || '', r.events, r.uniqueIps, r.attempts, r.accepted, r.commands,
+        r.lastSeen ? shortStamp(r.lastSeen) : ''
+      ]), [86, 40, 54, 44, 50, 54, 44, 118]);
     section('Top source IPs', ['IP', 'Events'],
       (stats.topIps || []).map((r) => [r.key, r.count]), [260, 90]);
     section('Events by service', ['Service', 'Events'],
       (stats.byService || []).map((r) => [r.key, r.count]), [260, 90]);
     section('Event types', ['Type', 'Count'],
       (stats.byType || []).map((r) => [r.key, r.count]), [260, 90]);
+    section('Targeted ports', ['Port / service', 'Events'],
+      (stats.topPorts || []).map((r) => [r.key, r.count]), [260, 90]);
     section('Top credentials', ['Username', 'Password', 'Count'],
       (stats.topCreds || []).map((r) => [r.username, r.password, r.count]), [170, 250, 60]);
+    section('Top usernames', ['Username', 'Tries'],
+      (stats.topUsernames || []).map((r) => [r.key, r.count]), [260, 90]);
+    section('Top passwords', ['Password', 'Tries'],
+      (stats.topPasswords || []).map((r) => [r.key, r.count]), [260, 90]);
     section('Top commands', ['Command', 'Count'],
       (stats.topCommands || []).map((r) => [r.key, r.count]), [430, 60]);
+    section('Requested HTTP paths', ['Path', 'Hits'],
+      (stats.topPaths || []).map((r) => [r.key, r.count]), [430, 60]);
+    section('Client fingerprints', ['User agent / version', 'Hits'],
+      (stats.topClients || []).map((r) => [r.key, r.count]), [430, 60]);
 
     const list = (rows || []).slice(-400);
     if (list.length) {

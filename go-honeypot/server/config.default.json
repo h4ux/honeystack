@@ -3,12 +3,22 @@
     "host": "0.0.0.0",
     "port": 9090,
     "authKeyFile": "data/auth.key",
-    "allowedOrigins": ["*"]
+    "allowedOrigins": [
+      "*"
+    ]
   },
   "storage": {
     "logFile": "data/events.ndjson",
     "maxLogRows": 200000,
     "hostKeyFile": "data/ssh_host_ed25519_key"
+  },
+  "geoip": {
+    "enabled": true,
+    "provider": "ipwho.is",
+    "cacheFile": "data/geoip-cache.json",
+    "ttlHours": 720,
+    "timeoutMs": 4000,
+    "rateLimitPerMin": 40
   },
   "services": {
     "ssh": {
@@ -19,7 +29,16 @@
       "fakeAuth": {
         "mode": "random",
         "acceptProbability": 0.15,
-        "acceptedUsernames": ["root", "admin", "ubuntu", "user", "test", "oracle", "pi", "git"],
+        "acceptedUsernames": [
+          "root",
+          "admin",
+          "ubuntu",
+          "user",
+          "test",
+          "oracle",
+          "pi",
+          "git"
+        ],
         "acceptedPasswords": [],
         "rejectAlwaysUsernames": []
       },
@@ -29,21 +48,310 @@
         "motd": "Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-105-generic x86_64)\n"
       }
     },
-    "telnet": { "enabled": true, "port": 23, "banner": "\r\nUbuntu 22.04 LTS\r\nweb-prod-01 login: ", "fakeAuth": { "mode": "random", "acceptProbability": 0.15, "acceptedUsernames": ["root", "admin", "ubuntu", "user", "test"] } },
-    "ftp":    { "enabled": true, "port": 21, "banner": "220 (vsFTPd 3.0.5)\r\n", "fakeAuth": { "mode": "random", "acceptProbability": 0.15, "acceptedUsernames": ["root", "admin", "ftp", "anonymous", "user"] } },
-    "http":   { "enabled": true, "port": 80, "serverHeader": "Apache/2.4.52 (Ubuntu)", "loginPagePath": "/login", "fakeAuth": { "mode": "random", "acceptProbability": 0.15, "acceptedUsernames": ["admin", "root", "user"] } },
-    "rdp":    { "enabled": true, "port": 3389 },
-    "mysql":  { "enabled": true, "port": 3306, "serverVersion": "8.0.36-0ubuntu0.22.04.1", "fakeAuth": { "mode": "random", "acceptProbability": 0.15, "acceptedUsernames": ["root", "admin", "mysql"] } },
-    "vnc":    { "enabled": true, "port": 5900, "banner": "RFB 003.008\n" },
-    "smb":    { "enabled": true, "port": 445 },
-    "redis":  { "enabled": true, "port": 6379, "fakeAuth": { "mode": "random", "acceptProbability": 0.15, "acceptedUsernames": ["default", "root"] } },
-    "postgres": { "enabled": false, "port": 5432 },
-    "clickhouse": { "enabled": true, "port": 8123, "serverVersion": "24.8.4.13" },
-    "clickhouse-native": { "enabled": true, "port": 9000, "serverVersion": "24.8.4.13" },
-    "mssql": { "enabled": true, "port": 1433, "serverVersion": "16.0.4135.4" },
-    "mongodb": { "enabled": true, "port": 27017, "serverVersion": "7.0.14" },
-    "elasticsearch": { "enabled": true, "port": 9200, "serverVersion": "8.15.1" },
-    "docker": { "enabled": true, "port": 2375, "serverVersion": "27.2.1" },
-    "mqtt": { "enabled": true, "port": 1883, "serverVersion": "2.0.18" }
+    "telnet": {
+      "enabled": true,
+      "port": 23,
+      "banner": "\r\nUbuntu 22.04 LTS\r\nweb-prod-01 login: ",
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "root",
+          "admin",
+          "ubuntu",
+          "user",
+          "test"
+        ]
+      }
+    },
+    "ftp": {
+      "enabled": true,
+      "port": 21,
+      "banner": "220 (vsFTPd 3.0.5)\r\n",
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "root",
+          "admin",
+          "ftp",
+          "anonymous",
+          "user"
+        ]
+      }
+    },
+    "http": {
+      "enabled": true,
+      "port": 80,
+      "serverHeader": "Apache/2.4.52 (Ubuntu)",
+      "loginPagePath": "/login",
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "admin",
+          "root",
+          "user"
+        ]
+      }
+    },
+    "rdp": {
+      "enabled": true,
+      "port": 3389
+    },
+    "mysql": {
+      "enabled": true,
+      "port": 3306,
+      "serverVersion": "8.0.36-0ubuntu0.22.04.1",
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "root",
+          "admin",
+          "mysql"
+        ]
+      }
+    },
+    "vnc": {
+      "enabled": true,
+      "port": 5900,
+      "banner": "RFB 003.008\n"
+    },
+    "smb": {
+      "enabled": true,
+      "port": 445
+    },
+    "redis": {
+      "enabled": true,
+      "port": 6379,
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "default",
+          "root"
+        ]
+      }
+    },
+    "postgres": {
+      "enabled": false,
+      "port": 5432
+    },
+    "clickhouse": {
+      "enabled": true,
+      "port": 8123,
+      "serverVersion": "24.8.4.13"
+    },
+    "clickhouse-native": {
+      "enabled": true,
+      "port": 9000,
+      "serverVersion": "24.8.4.13"
+    },
+    "mssql": {
+      "enabled": true,
+      "port": 1433,
+      "serverVersion": "16.0.4135.4"
+    },
+    "mongodb": {
+      "enabled": true,
+      "port": 27017,
+      "serverVersion": "7.0.14"
+    },
+    "elasticsearch": {
+      "enabled": true,
+      "port": 9200,
+      "serverVersion": "8.15.1"
+    },
+    "docker": {
+      "enabled": true,
+      "port": 2375,
+      "serverVersion": "27.2.1"
+    },
+    "mqtt": {
+      "enabled": true,
+      "port": 1883,
+      "serverVersion": "2.0.18"
+    },
+    "smtp": {
+      "enabled": true,
+      "port": 25,
+      "hostname": "mail.web-prod-01.local",
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "admin",
+          "root",
+          "postmaster",
+          "info",
+          "mail",
+          "test"
+        ]
+      }
+    },
+    "smtp-submission": {
+      "enabled": true,
+      "port": 587,
+      "hostname": "mail.web-prod-01.local",
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "admin",
+          "root",
+          "postmaster",
+          "info",
+          "sales"
+        ]
+      }
+    },
+    "imap": {
+      "enabled": true,
+      "port": 143,
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "admin",
+          "root",
+          "info",
+          "test",
+          "user"
+        ]
+      }
+    },
+    "pop3": {
+      "enabled": true,
+      "port": 110,
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "admin",
+          "root",
+          "info",
+          "test",
+          "user"
+        ]
+      }
+    },
+    "memcached": {
+      "enabled": true,
+      "port": 11211,
+      "serverVersion": "1.6.24"
+    },
+    "ldap": {
+      "enabled": true,
+      "port": 389,
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "admin",
+          "administrator",
+          "ldapadmin",
+          "root",
+          "svc-ldap"
+        ]
+      }
+    },
+    "rsync": {
+      "enabled": true,
+      "port": 873
+    },
+    "adb": {
+      "enabled": true,
+      "port": 5555,
+      "hostname": "generic_x86"
+    },
+    "squid": {
+      "enabled": true,
+      "port": 3128,
+      "serverHeader": "squid/6.6"
+    },
+    "http-proxy": {
+      "enabled": true,
+      "port": 8080,
+      "serverHeader": "squid/6.6"
+    },
+    "socks": {
+      "enabled": true,
+      "port": 1080,
+      "fakeAuth": {
+        "mode": "random",
+        "acceptProbability": 0.15,
+        "acceptedUsernames": [
+          "proxy",
+          "admin",
+          "user",
+          "root"
+        ]
+      }
+    },
+    "openvpn": {
+      "enabled": true,
+      "port": 1194,
+      "protocol": "udp"
+    },
+    "openvpn-tcp": {
+      "enabled": true,
+      "port": 1194,
+      "protocol": "tcp"
+    },
+    "ipsec-ike": {
+      "enabled": true,
+      "port": 500,
+      "protocol": "udp"
+    },
+    "ipsec-natt": {
+      "enabled": true,
+      "port": 4500,
+      "protocol": "udp"
+    },
+    "wireguard": {
+      "enabled": true,
+      "port": 51820,
+      "protocol": "udp"
+    },
+    "l2tp": {
+      "enabled": true,
+      "port": 1701,
+      "protocol": "udp"
+    },
+    "pptp": {
+      "enabled": true,
+      "port": 1723
+    },
+    "dns": {
+      "enabled": false,
+      "port": 53,
+      "protocol": "udp"
+    },
+    "snmp": {
+      "enabled": true,
+      "port": 161,
+      "protocol": "udp"
+    },
+    "ntp": {
+      "enabled": true,
+      "port": 123,
+      "protocol": "udp"
+    },
+    "tftp": {
+      "enabled": true,
+      "port": 69,
+      "protocol": "udp"
+    },
+    "sip": {
+      "enabled": true,
+      "port": 5060,
+      "protocol": "udp"
+    },
+    "sip-tcp": {
+      "enabled": true,
+      "port": 5060,
+      "protocol": "tcp"
+    }
   }
 }

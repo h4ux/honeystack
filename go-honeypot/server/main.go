@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/controlapi"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/geoip"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/honeypots"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/manager"
 )
@@ -25,13 +27,24 @@ import (
 var (
 	version = "dev"
 	commit  = "none"
+	// repo is where update checks look for a newer build. Overridable at
+	// build time: -X main.repo=owner/name
+	repo = "h4ux/honeystack"
 
 	flagDefaults = flag.String("defaults", "config.default.json", "path to shipped defaults")
 	flagConfig   = flag.String("config", "config.json", "path to writable user config")
+	flagVersion  = flag.Bool("version", false, "print version and exit")
 )
 
 func main() {
 	flag.Parse()
+	if *flagVersion {
+		// scripts/update-server.sh parses this line: keep "commit <sha>"
+		// and "repo=<owner/name>" in it.
+		fmt.Printf("honeypot %s (commit %s, %s, %s/%s, repo=%s)\n",
+			version, commit, runtime.Version(), runtime.GOOS, runtime.GOARCH, repo)
+		return
+	}
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	if abs, err := filepath.Abs(*flagDefaults); err == nil {
@@ -51,6 +64,12 @@ func main() {
 		log.Fatalf("eventlog init: %v", err)
 	}
 	defer store.Close()
+
+	// Country lookups are optional and never block a honeypot handler: the
+	// resolver answers from cache and fills misses on a background worker.
+	geo := geoip.New(cfg.Geo())
+	defer geo.Close()
+	store.SetGeo(geo)
 
 	// Mirror every event to stdout for operators.
 	store.Subscribe(func(e eventlog.Event) {
@@ -75,6 +94,18 @@ func main() {
 	printBanner(cfg, authKey)
 
 	api := controlapi.New(store, mgr, func(newCfg config.Config) { mgr.Sync(newCfg) })
+	api.SetGeo(geo)
+	binPath, _ := os.Executable()
+	api.SetBuildInfo(controlapi.BuildInfo{
+		Version:   version,
+		Commit:    commit,
+		GoVersion: runtime.Version(),
+		OS:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+		StartedAt: time.Now().UnixMilli(),
+		Repo:      repo,
+		Binary:    binPath,
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := api.Start(ctx, cfg.Control, authKey); err != nil {
@@ -149,6 +180,88 @@ func registerHoneypots(m *manager.Manager, cfg config.Config, store *eventlog.St
 	m.Register("mqtt", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
 		return honeypots.NewMQTT(c, s), nil
 	})
+
+	// Mail
+	m.Register("smtp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewSMTP(c, s), nil
+	})
+	m.Register("smtp-submission", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewSMTP(c, s), nil
+	})
+	m.Register("imap", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewIMAP(c, s), nil
+	})
+	m.Register("pop3", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewPOP3(c, s), nil
+	})
+
+	// Caches, directories, file sync, device debugging
+	m.Register("memcached", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewMemcached(c, s), nil
+	})
+	m.Register("ldap", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewLDAP(c, s), nil
+	})
+	m.Register("rsync", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewRsync(c, s), nil
+	})
+	m.Register("adb", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewADB(c, s), nil
+	})
+
+	// Open proxies — what proxy scanners are hunting for
+	m.Register("squid", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewSquid(c, s), nil
+	})
+	m.Register("http-proxy", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewHTTPProxy(c, s), nil
+	})
+	m.Register("socks", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewSOCKS(c, s), nil
+	})
+
+	// VPN endpoints
+	m.Register("openvpn", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewOpenVPN("openvpn", c, s), nil
+	})
+	m.Register("openvpn-tcp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewOpenVPNTCP(c, s), nil
+	})
+	m.Register("ipsec-ike", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewIKE("ipsec-ike", c, s), nil
+	})
+	m.Register("ipsec-natt", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewIKE("ipsec-natt", c, s), nil
+	})
+	m.Register("wireguard", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewWireGuard("wireguard", c, s), nil
+	})
+	m.Register("l2tp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewL2TP("l2tp", c, s), nil
+	})
+	m.Register("pptp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewPPTP(c, s), nil
+	})
+
+	// UDP infrastructure (reflection/amplification targets)
+	m.Register("dns", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewDNS("dns", c, s), nil
+	})
+	m.Register("snmp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewSNMP("snmp", c, s), nil
+	})
+	m.Register("ntp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewNTP("ntp", c, s), nil
+	})
+	m.Register("tftp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewTFTP("tftp", c, s), nil
+	})
+	m.Register("sip", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewSIP("sip", c, s), nil
+	})
+	m.Register("sip-tcp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
+		return honeypots.NewSIPTCP(c, s), nil
+	})
 }
 
 func formatEvent(e eventlog.Event) string {
@@ -181,6 +294,16 @@ func printBanner(cfg config.Config, key string) {
 		fmt.Printf("  version          : %s (%s)\n", version, commit)
 	} else if commit != "" && commit != "none" {
 		fmt.Printf("  version          : %s\n", commit)
+	}
+	geoCfg := cfg.Geo()
+	if geoCfg.Enabled {
+		provider := geoCfg.Provider
+		if provider == "" {
+			provider = "ipwho.is"
+		}
+		fmt.Printf("  geoip            : on (%s) — attacker IPs are sent to this provider\n", provider)
+	} else {
+		fmt.Println("  geoip            : off")
 	}
 	fmt.Printf("  control endpoint : ws://%s:%d/api\n", host, cfg.Control.Port)
 	fmt.Printf("  auth key         : %s\n", key)

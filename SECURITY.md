@@ -19,11 +19,11 @@ the current `nightly`, reproduce on the latest build before reporting.
 
 **Do not open a public issue for a security problem.**
 
-1. Preferred: open a private report through GitHub —
-   **Security → Advisories → Report a vulnerability** on
-   <https://github.com/h4ux/honeystack/security/advisories/new>.
-2. Alternative: email <i@h4ux.com> with `honeystack security` in the
-   subject.
+Open a private report through GitHub — **Security → Advisories → Report a
+vulnerability** on
+<https://github.com/h4ux/honeystack/security/advisories/new>. That channel
+is private to the maintainers, supports attachments and discussion, and
+becomes the advisory if the report is confirmed.
 
 Please include:
 

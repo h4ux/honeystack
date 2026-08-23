@@ -385,25 +385,31 @@ can provision them.
 ```jsonc
 "dyndns": {
   "enabled": true,
-  "provider": "cloudflare",        // cloudflare | duckdns | noip | xyz.frl | sslip.io | custom
+  "provider": "custom",
   "hostname": "hp.example.com",
-  "zone": "example.com",           // optional; inferred from hostname
   "credentialsFile": "data/dyndns.json",   // {"token": "…"} at 0600
+  "updateUrl": "https://api.example.com/dns/records/{hostname}",
+  "method": "PATCH",
+  "headers": { "Authorization": "Bearer {token}" },
+  "body": "{\"type\":\"A\",\"content\":\"{ip}\",\"ttl\":60}",
   "intervalMinutes": 5
 }
 ```
 
 | Provider | Kind | Needs | Stable name |
 |---|---|---|---|
-| `cloudflare` | API (PATCH + bearer token) | a domain you own, token scoped Zone→DNS→Edit | yes |
+| `custom` | any method, headers and body you specify | whatever your DNS API wants | yes |
 | `duckdns`, `noip` | GET + token | an account | yes |
 | `xyz.frl` | GET + basic auth | nothing | in principle — **not resolving when tested** |
 | `sslip.io`, `nip.io` | derived | nothing | no — the name encodes the address, so it changes with it |
-| `custom` | `updateUrl` (+ `method`, `headers`, `body`) | whatever your provider needs | yes |
 
-The Cloudflare client discovers the zone and record by name, creates the A
-record if it does not exist, and PATCHes it thereafter with TTL 60 and
-proxying off. It is the recommended option if you own a domain.
+There is no vendor-specific DNS code in this repo on purpose: `updateUrl`,
+`method`, `headers` and `body` are templates, so any provider's API can be
+expressed in configuration. `{ip}`, `{hostname}`, `{username}`,
+`{password}` and `{token}` are substituted in all four, and
+username/password are also sent as HTTP basic auth. Keep the token in
+`data/dyndns.json` (0600) rather than in `config.json`, which the dashboard
+rewrites.
 
 ### Either way: the change log
 

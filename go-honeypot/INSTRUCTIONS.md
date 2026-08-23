@@ -268,20 +268,31 @@ curl -s "https://ntfy.sh/<topic>/json?poll=1" | tail -1 | jq -r .message
 
 To turn it off: `beacon.enabled: false` in `config.json`.
 
-**DNS instead/as well.** If you own a domain, point a record at the box with
-a Cloudflare token:
+**DNS instead/as well.** If you have somewhere to put a record, the
+updater is a template — no provider code, so any API works:
 
 ```bash
-echo '{"token":"<cloudflare-api-token>"}' | sudo tee /opt/honeystack/data/dyndns.json
+echo '{"token":"<your-dns-api-token>"}' | sudo tee /opt/honeystack/data/dyndns.json
 sudo chmod 600 /opt/honeystack/data/dyndns.json
 sudo chown honeypot:honeypot /opt/honeystack/data/dyndns.json
-# in config.json:  "dyndns": {"enabled": true, "provider": "cloudflare",
-#                             "hostname": "hp.example.com", "zone": "example.com"}
-sudo systemctl restart honeypot-go
 ```
 
-Token scope: Zone → DNS → Edit, limited to that zone. The daemon creates
-the A record if it is missing and keeps it at TTL 60.
+then in `config.json`:
+
+```jsonc
+"dyndns": {
+  "enabled": true, "provider": "custom", "hostname": "hp.example.com",
+  "updateUrl": "https://api.example.com/dns/records/{hostname}",
+  "method": "PATCH",
+  "headers": { "Authorization": "Bearer {token}" },
+  "body": "{\"type\":\"A\",\"content\":\"{ip}\",\"ttl\":60}"
+}
+```
+
+`{ip}`, `{hostname}`, `{username}`, `{password}` and `{token}` are
+substituted into the URL, headers and body. Providers that take a simple
+GET (DuckDNS, No-IP, and similar) only need `provider` and the credentials
+file.
 
 Free anonymous DNS is not a real option — see the note in
 [README.md](./README.md#dns-optional) for what was tested and why.

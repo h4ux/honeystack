@@ -90,10 +90,6 @@ type Tracker struct {
 	beacon      *beacon
 	controlPort int
 
-	// Cloudflare ids, discovered once and reused.
-	cfZoneID   string
-	cfRecordID string
-
 	client *http.Client
 
 	mu           sync.RWMutex
@@ -400,9 +396,6 @@ func (t *Tracker) pushUpdate(ctx context.Context, ip string, changed bool) (stri
 	if derivedZone(t.cfg.Provider) != "" && t.cfg.UpdateURL == "" {
 		return "derived", 0
 	}
-	if strings.EqualFold(t.cfg.Provider, "cloudflare") && t.cfg.UpdateURL == "" {
-		return t.updateCloudflare(ctx, ip)
-	}
 	url := t.updateURL(ip)
 	if url == "" {
 		return "no-provider", 0
@@ -418,7 +411,15 @@ func (t *Tracker) pushUpdate(ctx context.Context, ip string, changed bool) (stri
 		return "skipped", 0
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	method := t.cfg.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	var reqBody io.Reader
+	if t.cfg.Body != "" {
+		reqBody = strings.NewReader(t.expand(t.cfg.Body, ip))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
 		return "error: " + err.Error(), 0
 	}
@@ -426,6 +427,14 @@ func (t *Tracker) pushUpdate(ctx context.Context, ip string, changed bool) (stri
 		req.SetBasicAuth(user, pass)
 	}
 	req.Header.Set("User-Agent", "honeystack-pubaddr/1")
+	if t.cfg.Body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	// Headers are templated too, so an API token can live in the
+	// credentials file rather than in config.json.
+	for k, v := range t.cfg.Headers {
+		req.Header.Set(k, t.expand(v, ip))
+	}
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return "error: " + err.Error(), 0
@@ -483,13 +492,18 @@ func (t *Tracker) updateURL(ip string) string {
 	if t.username() == "" && t.password() == "" && strings.Contains(tmpl, "{password}") {
 		return ""
 	}
-	r := strings.NewReplacer(
+	return t.expand(tmpl, ip)
+}
+
+// expand fills the placeholders any provider template may use.
+func (t *Tracker) expand(tmpl, ip string) string {
+	return strings.NewReplacer(
 		"{ip}", ip,
-		"{hostname}", host,
+		"{hostname}", t.Hostname(),
 		"{username}", t.username(),
 		"{password}", t.password(),
-	)
-	return r.Replace(tmpl)
+		"{token}", t.token(),
+	).Replace(tmpl)
 }
 
 func (t *Tracker) username() string {

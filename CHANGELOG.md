@@ -29,9 +29,10 @@ are no versioned releases yet: `main` is published continuously as the
   drops it reads the beacon, verifies the HMAC against the key held in the
   URL fragment, and reconnects at the new address. A `custom` backend
   covers any endpoint that accepts a body and serves it back with CORS.
-- **Cloudflare DNS provider** for anyone who owns a domain: discovers zone
-  and record by name, creates the A record when missing, then PATCHes it
-  (TTL 60, proxy off) with a scoped API token.
+- **Generic DNS updater**: `updateUrl`, `method`, `headers` and `body` are
+  templates (`{ip}`, `{hostname}`, `{username}`, `{password}`, `{token}`),
+  so any provider's API can be expressed in configuration. No
+  vendor-specific DNS code ships in this repo.
 - **Public address tracking and dynamic DNS.** The daemon polls its own
   public IP every `dyndns.intervalMinutes` (default 5), records every
   change to `data/ip-history.json`, logs it as a `public_ip_changed`

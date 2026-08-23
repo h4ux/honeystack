@@ -442,9 +442,10 @@ configure_dyndns() {
   note "            dashboard once and it follows this host forever, even"
   note "            when the address moves. Signed, so nobody else can"
   note "            redirect your dashboard."
-  note "  dns     — a hostname that points here. Needs either a domain you"
-  note "            own (Cloudflare token) or a provider account. Skip it"
-  note "            unless you have one; the beacon already solves finding."
+  note "  dns     — a hostname that points here. Needs somewhere to put a"
+  note "            record (a domain you control, or a provider account)."
+  note "            Skip it unless you have one; the beacon already solves"
+  note "            finding this host."
   note "Either way every address change is recorded in the dashboard."
 
   if (( ! DO_DYNDNS )); then
@@ -479,10 +480,10 @@ EOF
     ok "DNS credentials stored (0600); provider ${DYNDNS_PROVIDER}"
     set_dyndns_config "true" "$DYNDNS_PROVIDER"
   else
-    set_dyndns_config "false" "cloudflare"
-    note "no DNS configured. To add one later (a domain you own):"
-    note "  echo '{\"token\":\"<cloudflare-token>\"}' > ${INSTALL_DIR}/data/dyndns.json"
-    note "  then set dyndns.enabled/provider/hostname/zone in config.json"
+    set_dyndns_config "false" "custom"
+    note "no DNS configured. To add one later (anywhere you can put a record):"
+    note "  echo '{\"token\":\"<dns-api-token>\"}' > ${INSTALL_DIR}/data/dyndns.json"
+    note "  then set dyndns.enabled/hostname/updateUrl in config.json"
   fi
 }
 

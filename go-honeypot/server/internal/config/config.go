@@ -52,16 +52,14 @@ type DynDNS struct {
 	// UpdateURL overrides the provider. {ip}, {hostname}, {username},
 	// {password} and {token} are substituted before the request.
 	UpdateURL string `json:"updateUrl,omitempty"`
-	// Method, Headers and Body turn UpdateURL into a generic REST call, so
-	// providers that need PATCH/POST with JSON (Cloudflare, deSEC, Hetzner,
-	// DigitalOcean…) work without new code.
+	// Method, Headers and Body turn UpdateURL into a generic REST call, so a
+	// provider that needs PATCH/POST with a JSON body works without any
+	// vendor-specific code in this repo.
 	Method  string            `json:"method,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    string            `json:"body,omitempty"`
-	// Zone is the DNS zone for API providers that address records by zone,
-	// e.g. "example.com" when Hostname is "hp.example.com".
-	Zone string `json:"zone,omitempty"`
-	// Token is an API token; it can also live in the credentials file.
+	// Token is an API token for providers that use one; it can also live in
+	// the credentials file. Available to templates as {token}.
 	Token string `json:"token,omitempty"`
 	// VerifyDNS resolves the hostname after each update and reports whether
 	// it actually points here. Default true — a provider that accepts

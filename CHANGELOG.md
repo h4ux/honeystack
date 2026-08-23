@@ -49,6 +49,19 @@ are no versioned releases yet: `main` is published continuously as the
   updates (HTTP 202) but its hostnames did not resolve when this was
   written — tracking and the change log do not depend on that.
 
+### Fixed
+
+- **Stats tiles were misleading once the event ring filled up.** Every
+  counter is computed over the ring, so on a busy host "events retained",
+  "last 24 hours" and "last hour" all showed the same number (the ring
+  holds minutes, not a day), and the derived rates divided that capped
+  count by a fixed 24h/60min window — understating the real rate by the
+  ratio between them (measured 194× on a saturated 10k ring). Stats now
+  report `retentionLimit`, `retentionFull` and `windowMs`; the tiles say
+  "ring full at 10,000 — holds 47s of traffic", relabel the second tile to
+  the real window, and a new **Ingest rate** tile uses the uncapped
+  run counters for the true rate.
+
 ### Changed
 
 - `update-server.sh` now refreshes `config.default.json` alongside the

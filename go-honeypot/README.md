@@ -50,6 +50,25 @@ sessions to the browser just to hide most of them.
 settings, and the traffic it has actually attracted: events, unique
 source IPs, credential attempts, grants, and the last hit.
 
+### Why "retained", "last 24h" and "last hour" can show the same number
+
+Every counter is computed over the in-memory ring, so once that ring is
+full it describes a *window*, not a period. On a host taking 2,000
+events/minute with `maxLogRows: 10000`, the ring holds about five minutes —
+so everything in it is also "in the last hour" and "in the last 24 hours",
+and all three tiles read 10,000.
+
+The dashboard says so rather than implying otherwise: when the ring is
+full, the first tile reads `ring full at 10,000 — holds 47s of traffic`,
+the second is relabelled `Retained (47s)`, and the **Ingest rate** tile
+reports the true rate from the uncapped run counters (`trafficSinceStart ÷
+uptime`) instead of dividing a capped count by a fixed 24h/60min window.
+`events.ndjson` still holds the full record either way.
+
+To keep a longer window, raise `storage.maxLogRows` (about 2.5 KB of RAM
+per event, so 100,000 rows ≈ 250 MB) or reduce the noise — the UDP
+reflection listeners generate the most events per unit of insight.
+
 **Stats** — thirteen KPI tiles (events retained, last 24 h, last hour,
 unique attackers, credential attempts, grants and accept rate, fake shell
 sessions, open/retained sessions, busiest service, peak hour, **uptime

@@ -1177,13 +1177,50 @@
     const accepted = s.accepted || 0;
     const acceptRate = attempts ? Math.round((accepted / attempts) * 100) : 0;
     const busiest = (s.byService || [])[0];
-    const perHour = s.last24h ? Math.round(s.last24h / 24) : 0;
-    const perMin = s.eventsPerMin != null ? s.eventsPerMin : (s.lastHour || 0) / 60;
+
+    // Every counter is computed over the memory ring. Once that ring is
+    // full it holds a *window*, not a period: with 10k rows and a busy
+    // host, "retained", "last 24h" and "last hour" are all the same number
+    // because everything kept is minutes old. Dividing by 24h/60min then
+    // understates the real rate by whatever that ratio is, so derive rates
+    // from the window we actually have (or from the uncapped run counters).
+    const windowMs = s.windowMs || (s.firstEventTs ? Date.now() - s.firstEventTs : 0);
+    const capped = !!s.retentionFull;
+    const windowLabel = windowMs ? durationMs(windowMs) : 'no data';
+    const shortOf = (ms) => windowMs > 0 && windowMs < ms;
+
+    const runMinutes = s.uptimeMs ? s.uptimeMs / 60000 : 0;
+    const runRate = runMinutes >= 0.5 && s.trafficSinceStart != null
+      ? s.trafficSinceStart / runMinutes
+      : null;
+    const windowMinutes = windowMs / 60000;
+    const windowRate = windowMinutes > 0 ? (s.total || 0) / windowMinutes : 0;
+    const ratePerMin = runRate != null ? runRate : windowRate;
+    const rateSource = runRate != null ? 'this run' : 'retained window';
+    const perHour = Math.round(ratePerMin * 60);
 
     const cards = [
-      { label: 'Events retained', value: s.total, sub: s.firstEventTs ? 'oldest ' + shortStamp(s.firstEventTs) : 'nothing logged yet' },
-      { label: 'Last 24 hours', value: s.last24h, sub: `≈ ${num(perHour)}/hour`, spark: counts },
-      { label: 'Last hour', value: s.lastHour, sub: `${perMin.toFixed(perMin < 10 ? 1 : 0)} events/min` },
+      {
+        label: 'Events retained',
+        value: s.total,
+        sub: capped
+          ? `ring full at ${num(s.retentionLimit)} — holds ${windowLabel} of traffic`
+          : (s.firstEventTs ? 'oldest ' + shortStamp(s.firstEventTs) : 'nothing logged yet')
+      },
+      {
+        label: shortOf(24 * 3600 * 1000) ? `Retained (${windowLabel})` : 'Last 24 hours',
+        value: shortOf(24 * 3600 * 1000) ? s.total : s.last24h,
+        sub: shortOf(24 * 3600 * 1000)
+          ? `less than 24h is kept — ≈ ${num(perHour)}/hour at this rate`
+          : `≈ ${num(perHour)}/hour`,
+        spark: counts
+      },
+      {
+        label: 'Ingest rate',
+        value: ratePerMin >= 100 ? Math.round(ratePerMin) : Number(ratePerMin.toFixed(1)),
+        unit: '/min',
+        sub: `${escape(rateSource)} · ${num(Math.round(ratePerMin * 60))}/hour`
+      },
       { label: 'Unique attackers', value: s.uniqueIps, sub: `${num(s.uniqueIps24h)} seen in last 24h` },
       { label: 'Credential attempts', value: attempts, sub: `${num(s.rejected)} refused · ${num(accepted)} granted` },
       { label: 'Fake access granted', value: accepted, sub: `${acceptRate}% of all attempts` },
@@ -1219,7 +1256,7 @@
     $('#stats-cards').innerHTML = cards.map((c, i) => `
       <div class="card ${CARD_COLORS[i % CARD_COLORS.length]}"${c.live ? ` data-live="${c.live}"` : ''}>
         <div class="label">${escape(c.label)}</div>
-        <div class="value">${c.text ? escape(String(c.value)) : num(c.value)}</div>
+        <div class="value">${c.text ? escape(String(c.value)) : num(c.value)}${c.unit ? `<span class="unit">${escape(c.unit)}</span>` : ''}</div>
         <div class="sub">${escape(c.sub)}</div>
         ${c.spark ? '<canvas class="spark" data-spark="1"></canvas>' : ''}
       </div>`).join('');
@@ -1229,10 +1266,15 @@
     const range = s.firstEventTs && s.lastEventTs
       ? `${shortStamp(s.firstEventTs)} → ${shortStamp(s.lastEventTs)}`
       : 'no events yet';
+    const capLine = capped
+      ? ` · <b>the ring is full</b>: counts are limited by <code>storage.maxLogRows</code>` +
+        ` (${num(s.retentionLimit)}), which holds <b>${escape(windowLabel)}</b> at the current rate` +
+        ` — raise it for a longer view (~2.5 KB of RAM per event), or query <code>events.ndjson</code> for the full record`
+      : '';
     const runLine = s.startedAt
       ? ` · this run started <b>${escape(shortStamp(s.startedAt))}</b> (<span id="stats-uptime">${escape(durationMs(Date.now() - s.startedAt))}</span> ago) with <b>${num(s.trafficSinceStart != null ? s.trafficSinceStart : s.eventsSinceStart)}</b> inbound events since`
       : '';
-    $('#stats-window').innerHTML = `Retained window: <b>${escape(range)}</b> · all counters cover the memory ring plus whatever was replayed from <code>events.ndjson</code>${runLine}.`;
+    $('#stats-window').innerHTML = `Retained window: <b>${escape(range)}</b> · all counters cover the memory ring plus whatever was replayed from <code>events.ndjson</code>${runLine}${capLine}.`;
     $('#stats-peak').textContent = s.peakHour ? `busiest hour ${s.peakHour} UTC (${num(s.peakHourCount)})` : '';
 
     drawStatsCharts(s, timeline);

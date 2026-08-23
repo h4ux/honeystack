@@ -73,6 +73,14 @@ type Stats struct {
 	FirstEventTS   int64 `json:"firstEventTs"`
 	LastEventTS    int64 `json:"lastEventTs"`
 
+	// Retention context. Every counter above is computed over the ring, so
+	// once it is full they describe the retention window rather than the
+	// period they are named after — the dashboard needs to say so instead
+	// of implying "10,000 events in the last 24 hours".
+	RetentionLimit int   `json:"retentionLimit"`
+	RetentionFull  bool  `json:"retentionFull"`
+	WindowMs       int64 `json:"windowMs"`
+
 	// This run, as opposed to everything retained: the ring is rehydrated
 	// from events.ndjson on boot, so most counters above can describe
 	// traffic from previous runs.
@@ -943,9 +951,14 @@ func (s *Store) computeStats() Stats {
 	cutoff1h := now.Add(-time.Hour).UnixMilli()
 
 	stats := Stats{Total: len(s.events)}
+	stats.RetentionLimit = s.max
+	stats.RetentionFull = len(s.events) >= s.max
 	if len(s.events) > 0 {
 		stats.FirstEventTS = s.events[0].TS
 		stats.LastEventTS = s.events[len(s.events)-1].TS
+		// Measure to "now", not to the newest event: on a quiet host the
+		// window really is that old.
+		stats.WindowMs = now.UnixMilli() - stats.FirstEventTS
 	}
 
 	typeCount := map[string]int{}

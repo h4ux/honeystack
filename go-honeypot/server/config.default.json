@@ -27,7 +27,7 @@
   },
   "dyndns": {
     "enabled": false,
-    "provider": "xyz.frl",
+    "provider": "sslip.io",
     "credentialsFile": "data/dyndns.json",
     "intervalMinutes": 5,
     "ipCheckUrls": [

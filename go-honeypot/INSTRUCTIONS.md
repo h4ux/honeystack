@@ -237,10 +237,24 @@ sizing profiles for 512 MB / 1 GB / 4 GB hosts.
 
 ## 2f. A hostname that survives an IP change
 
-The installer offers to mint a free, anonymous dynamic-DNS hostname
-(`xyz.frl`) and stores the credential in
-`/opt/honeystack/data/dyndns.json` (0600). After that the daemon refreshes
-it every 5 minutes and records every address change.
+The installer offers two options, neither of which needs an account:
+
+- **`sslip.io` (default)** — the name encodes the address
+  (`62-228-88-158.sslip.io`), so it resolves immediately with nothing
+  registered and no credential stored. The name changes when the address
+  does; the current one is always in the banner, in
+  `systemctl status honeypot-go` and in the dashboard.
+- **`xyz.frl`** — a stable random name, minted anonymously at install and
+  stored in `/opt/honeystack/data/dyndns.json` (0600). See the caveat
+  below.
+
+DuckDNS and No-IP are supported too, but both require signing up for a
+token first (DuckDNS uses OAuth), so the installer cannot create one for
+you — set `dyndns.provider` and drop the token into the credentials file
+afterwards.
+
+Either way the daemon refreshes every 5 minutes and records every address
+change.
 
 Where to see the address:
 

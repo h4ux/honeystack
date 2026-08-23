@@ -127,7 +127,8 @@ func (t *Tracker) SetOnChange(fn func(Status)) {
 
 func (t *Tracker) Enabled() bool { return t.cfg.Enabled }
 
-// Hostname is the name this host is reachable by, if one is configured.
+// Hostname is the name this host is reachable by: configured, registered,
+// or derived from the current address for wildcard providers.
 func (t *Tracker) Hostname() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -138,7 +139,41 @@ func (t *Tracker) hostnameLocked() string {
 	if t.cfg.Hostname != "" {
 		return t.cfg.Hostname
 	}
-	return t.creds.Hostname
+	if t.creds.Hostname != "" {
+		return t.creds.Hostname
+	}
+	// Wildcard providers encode the address in the name, so the hostname is
+	// computed rather than registered — no account, no update request.
+	if zone := derivedZone(t.cfg.Provider); zone != "" && t.ip != "" {
+		return derivedHostname(t.ip, zone)
+	}
+	return ""
+}
+
+// derivedZone reports the wildcard zone for providers that resolve
+// "1-2-3-4.zone" to 1.2.3.4. These need no signup and no credentials; the
+// trade is that the name changes when the address does.
+func derivedZone(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "sslip.io", "sslip":
+		return "sslip.io"
+	case "nip.io", "nip":
+		return "nip.io"
+	case "traefik.me", "traefik":
+		return "traefik.me"
+	default:
+		return ""
+	}
+}
+
+func derivedHostname(ip, zone string) string {
+	if ip == "" || zone == "" {
+		return ""
+	}
+	// IPv6 uses dashes for colons in the same scheme.
+	name := strings.ReplaceAll(ip, ".", "-")
+	name = strings.ReplaceAll(name, ":", "-")
+	return name + "." + zone
 }
 
 // URL is the hostname as an https:// address, for printing.
@@ -334,6 +369,10 @@ func (t *Tracker) detectIP(ctx context.Context) (string, string, error) {
 // status string and the HTTP code, and never blocks longer than the client
 // timeout.
 func (t *Tracker) pushUpdate(ctx context.Context, ip string, changed bool) (string, int) {
+	// A wildcard name is already correct the moment the address is known.
+	if derivedZone(t.cfg.Provider) != "" && t.cfg.UpdateURL == "" {
+		return "derived", 0
+	}
 	url := t.updateURL(ip)
 	if url == "" {
 		return "no-provider", 0
@@ -396,6 +435,8 @@ func (t *Tracker) updateURL(ip string) string {
 			tmpl = "https://www.duckdns.org/update?domains={hostname}&token={password}&ip={ip}"
 		case "noip", "no-ip":
 			tmpl = "https://dynupdate.no-ip.com/nic/update?hostname={hostname}&myip={ip}"
+		case "sslip.io", "sslip", "nip.io", "nip", "traefik.me", "traefik":
+			return "" // wildcard: nothing to update
 		case "dyndns", "custom":
 			return "" // a custom provider must supply updateUrl
 		default:
@@ -404,6 +445,9 @@ func (t *Tracker) updateURL(ip string) string {
 	}
 	host := t.Hostname()
 	if strings.Contains(tmpl, "{hostname}") && host == "" {
+		return ""
+	}
+	if derivedZone(t.cfg.Provider) != "" && t.cfg.UpdateURL == "" {
 		return ""
 	}
 	if t.username() == "" && t.password() == "" && strings.Contains(tmpl, "{password}") {

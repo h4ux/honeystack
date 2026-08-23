@@ -379,7 +379,10 @@ func printBanner(cfg config.Config, key string, addr *pubaddr.Tracker) {
 		fmt.Printf("  public address   : %s   (dyndns: %s, refreshed every %dm)\n",
 			url, providerName(cfg.Dyn()), intervalOf(cfg.Dyn()))
 	} else if cfg.Dyn().Enabled {
-		fmt.Println("  public address   : dyndns enabled but no hostname yet — see data/dyndns.json")
+		// Wildcard providers derive the name from the address, which is not
+		// known until the first check a moment from now.
+		fmt.Printf("  public address   : resolving via %s (printed once the first check lands)\n",
+			providerName(cfg.Dyn()))
 	}
 	fmt.Printf("  control endpoint : ws://%s:%d/api\n", host, cfg.Control.Port)
 	fmt.Printf("  auth key         : %s\n", key)

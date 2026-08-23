@@ -34,7 +34,8 @@
 #                          (default: honeypot)
 #       --memory MB        daemon memory budget (default 192; sets
 #                          GOMEMLIMIT, MemoryHigh and MemoryMax)
-#       --skip-dyndns      do not offer a dynamic-DNS hostname
+#       --skip-dyndns      do not set up any public name
+#                          (IP changes are still tracked and logged)
 #       --dyndns-user U    use an existing credential instead of creating one
 #       --dyndns-pass P    (with --dyndns-host)
 #       --dyndns-host H
@@ -74,6 +75,7 @@ DO_DYNDNS=1
 DYNDNS_USER=""
 DYNDNS_PASS=""
 DYNDNS_HOST=""
+DYNDNS_PROVIDER=""
 ADMIN_USER="${SUDO_USER:-}"
 
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/main/go-honeypot/server"
@@ -432,27 +434,69 @@ EOF
 
 # ==================================================== step 2b: public name
 configure_dyndns() {
-  step "Step 3/5 — a stable hostname for this box"
-  note "A honeypot on a dynamic IP loses its dashboard bookmark every time"
-  note "the address changes. xyz.frl hands out a free, anonymous DynDNS"
-  note "hostname (no signup); the daemon then refreshes it every 5 minutes"
-  note "and records every address change in its own log."
-  note "Whatever you choose, the daemon still tracks and logs IP changes."
+  step "Step 3/5 — a public name for this box"
+  note "A honeypot on a dynamic IP loses its dashboard bookmark whenever the"
+  note "address changes. Two options, both free and neither needs an account:"
+  note "  sslip.io  — the name encodes the address (62-228-88-158.sslip.io)."
+  note "              Always resolves, nothing to register, but the name"
+  note "              changes when the address does."
+  note "  xyz.frl   — a stable random name you keep. No signup either, but at"
+  note "              the time of writing its names were not resolving."
+  note "Either way the daemon tracks the address every 5 minutes and logs"
+  note "every change in the dashboard."
 
   if (( ! DO_DYNDNS )); then warn "skipped (--skip-dyndns)"; return; fi
 
+  local mode=""
   if [[ -n "$DYNDNS_USER" && -n "$DYNDNS_PASS" ]]; then
+    mode="credentials"
     log "using the credentials passed on the command line"
-  else
-    if ! ask "Create a free dynamic-DNS hostname at xyz.frl for this host?" y; then
-      warn "no hostname — IP changes are still tracked and logged"
-      return
+  elif ask "Set up a public name for this host?" y; then
+    if ask "Use sslip.io (nothing to register, name follows the IP)?" y; then
+      mode="derived"
+    elif ask "Try xyz.frl instead (stable name, may not resolve yet)?" n; then
+      mode="xyzfrl"
+    else
+      mode="none"
     fi
+  else
+    mode="none"
+  fi
+
+  if [[ "$mode" == "none" ]]; then
+    warn "no public name — the daemon still tracks and logs IP changes"
+    DYNDNS_PROVIDER="sslip.io"
+    set_dyndns_config "false" "sslip.io"
+    return
+  fi
+
+  if [[ "$mode" == "derived" ]]; then
+    DYNDNS_PROVIDER="sslip.io"
+    set_dyndns_config "true" "sslip.io"
+    local ip
+    ip="$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)"
+    if [[ -n "$ip" ]]; then
+      DYNDNS_HOST="$(printf '%s' "$ip" | tr '.' '-').sslip.io"
+      ok "public name: ${DYNDNS_HOST}"
+      if command -v getent >/dev/null 2>&1 && getent hosts "$DYNDNS_HOST" >/dev/null 2>&1; then
+        ok "${DYNDNS_HOST} resolves"
+      else
+        note "could not resolve it from here; the daemon will keep reporting it"
+      fi
+    else
+      ok "sslip.io selected; the daemon derives the name once it sees its address"
+    fi
+    return
+  fi
+
+  if [[ "$mode" == "xyzfrl" ]]; then
     log "requesting a hostname from https://xyz.frl/generate"
     local json
     json="$(curl -fsSL --show-error -m 20 https://xyz.frl/generate 2>&1)" || {
       warn "could not reach xyz.frl: ${json}"
-      note "re-run later, or set dyndns.* in ${INSTALL_DIR}/config.json by hand"
+      note "falling back to sslip.io"
+      DYNDNS_PROVIDER="sslip.io"
+      set_dyndns_config "true" "sslip.io"
       return
     }
     DYNDNS_HOST="$(printf '%s' "$json" | sed -n 's/.*"hostname"[: ]*"\([^"]*\)".*/\1/p')"
@@ -460,12 +504,17 @@ configure_dyndns() {
     DYNDNS_PASS="$(printf '%s' "$json" | sed -n 's/.*"password"[: ]*"\([^"]*\)".*/\1/p')"
     if [[ -z "$DYNDNS_HOST" || -z "$DYNDNS_USER" || -z "$DYNDNS_PASS" ]]; then
       warn "unexpected response from xyz.frl: $(printf '%s' "$json" | head -c 120)"
+      note "falling back to sslip.io"
+      DYNDNS_PROVIDER="sslip.io"
+      set_dyndns_config "true" "sslip.io"
       return
     fi
     ok "hostname: ${DYNDNS_HOST}"
   fi
 
-  install -d -o "$SVC_USER" -g "$SVC_USER" -m 0750 "$INSTALL_DIR/data" 2>/dev/null || install -d -m 0750 "$INSTALL_DIR/data"
+  # A registered name (xyz.frl or credentials given on the command line).
+  DYNDNS_PROVIDER="${DYNDNS_PROVIDER:-xyz.frl}"
+  install -d -m 0750 "$INSTALL_DIR/data"
   cat > "$INSTALL_DIR/data/dyndns.json" <<EOF
 {
   "hostname": "${DYNDNS_HOST}",
@@ -476,49 +525,53 @@ EOF
   chmod 0600 "$INSTALL_DIR/data/dyndns.json"
   id "$SVC_USER" &>/dev/null && chown "$SVC_USER":"$SVC_USER" "$INSTALL_DIR/data/dyndns.json"
   ok "credentials stored in ${INSTALL_DIR}/data/dyndns.json (0600)"
+  set_dyndns_config "true" "$DYNDNS_PROVIDER"
 
-  if command -v python3 >/dev/null 2>&1 && [[ -f "$INSTALL_DIR/config.json" ]]; then
-    python3 - "$INSTALL_DIR/config.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    cfg = json.load(f)
-dyn = cfg.setdefault("dyndns", {})
-dyn["enabled"] = True
-dyn.setdefault("provider", "xyz.frl")
-dyn.setdefault("credentialsFile", "data/dyndns.json")
-dyn.setdefault("intervalMinutes", 5)
-with open(path, "w") as f:
-    json.dump(cfg, f, indent=2)
-PY
-    ok "dyndns enabled in config.json (refresh every 5 minutes)"
-  else
-    warn "could not edit config.json — set dyndns.enabled to true by hand"
-  fi
-
-  # Prove it end to end rather than assuming.
-  local ip
+  local ip code
   ip="$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)"
   if [[ -n "$ip" ]]; then
-    local code
     code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 --user "${DYNDNS_USER}:${DYNDNS_PASS}" \
              "https://xyz.frl/nic/update?myip=${ip}" || true)"
     case "$code" in
-      2*) ok "first update accepted (HTTP ${code}) for ${ip}" ;;
-      429) warn "provider rate-limited the first update (HTTP 429) — the daemon will retry" ;;
-      *)  warn "first update returned HTTP ${code:-none}; the daemon will keep trying" ;;
+      2*)  ok "first update accepted (HTTP ${code}) for ${ip}" ;;
+      429) warn "provider rate-limited the first update — the daemon will retry" ;;
+      *)   warn "first update returned HTTP ${code:-none}; the daemon will keep trying" ;;
     esac
     sleep 3
     if command -v getent >/dev/null 2>&1 && getent hosts "$DYNDNS_HOST" >/dev/null 2>&1; then
       ok "${DYNDNS_HOST} resolves"
     else
       warn "${DYNDNS_HOST} does not resolve yet"
-      note "xyz.frl accepts updates but may take time to publish (or may not"
-      note "publish at all). Reach the box by IP meanwhile; the dashboard's"
-      note "Public address panel shows every change either way. To use a"
-      note "different provider set dyndns.provider/updateUrl in config.json."
+      note "xyz.frl accepts updates but may not publish records. Switch to the"
+      note "no-signup fallback any time:  dyndns.provider = \"sslip.io\" in"
+      note "${INSTALL_DIR}/config.json (delete data/dyndns.json), or point"
+      note "dyndns.updateUrl at a provider you control."
     fi
   fi
+}
+
+# set_dyndns_config <enabled> <provider>
+set_dyndns_config() {
+  local enabled="$1" provider="$2"
+  if ! command -v python3 >/dev/null 2>&1 || [[ ! -f "$INSTALL_DIR/config.json" ]]; then
+    warn "could not edit config.json — set dyndns.enabled/provider by hand"
+    return
+  fi
+  python3 - "$INSTALL_DIR/config.json" "$enabled" "$provider" <<'PY'
+import json, sys
+path, enabled, provider = sys.argv[1], sys.argv[2] == "true", sys.argv[3]
+with open(path) as f:
+    cfg = json.load(f)
+dyn = cfg.setdefault("dyndns", {})
+dyn["enabled"] = enabled
+dyn["provider"] = provider
+dyn.setdefault("credentialsFile", "data/dyndns.json")
+dyn.setdefault("intervalMinutes", 5)
+dyn.setdefault("historyFile", "data/ip-history.json")
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+PY
+  ok "dyndns: enabled=${enabled} provider=${provider} (refresh every 5 minutes)"
 }
 
 # ======================================================== step 3: service
@@ -683,7 +736,9 @@ summary() {
   step "Done"
   local dyn_line="not configured (IP changes are still tracked)"
   if [[ -n "$DYNDNS_HOST" ]]; then
-    dyn_line="https://${DYNDNS_HOST}  (refreshed every 5 min)"
+    dyn_line="https://${DYNDNS_HOST}  (${DYNDNS_PROVIDER:-dyndns}, refreshed every 5 min)"
+  elif [[ -n "$DYNDNS_PROVIDER" ]]; then
+    dyn_line="${DYNDNS_PROVIDER} — name appears in 'systemctl status ${SERVICE_NAME}'"
   fi
   cat <<SUM
   real SSH      : ssh -p ${SSH_PORT} ${ADMIN_USER:-<user>}@${ip}

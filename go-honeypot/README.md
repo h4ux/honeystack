@@ -324,7 +324,7 @@ pointed at it.
 ```jsonc
 "dyndns": {
   "enabled": true,
-  "provider": "xyz.frl",                    // xyz.frl | duckdns | noip | custom
+  "provider": "sslip.io",                   // sslip.io | xyz.frl | duckdns | noip | custom
   "credentialsFile": "data/dyndns.json",    // 0600, written at install time
   "intervalMinutes": 5,
   "ipCheckUrls": ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"],
@@ -360,16 +360,33 @@ PDF like anything else — and refreshes the systemd status line.
 
 ### Providers
 
-`provider` picks a URL template; `updateUrl` overrides it entirely.
-`{ip}`, `{hostname}`, `{username}` and `{password}` are substituted, and
-credentials are also sent as HTTP basic auth:
+There are two kinds. **Derived** providers need no account, no credential
+and no update request at all — the address is encoded in the name, so the
+daemon just computes it. **Registered** providers give you a name that
+stays the same across IP changes, at the cost of holding a credential.
 
-| Provider | Request |
-|---|---|
-| `xyz.frl` (default) | `https://xyz.frl/nic/update?myip={ip}` + basic auth |
-| `duckdns` | `https://www.duckdns.org/update?domains={hostname}&token={password}&ip={ip}` |
-| `noip` | `https://dynupdate.no-ip.com/nic/update?hostname={hostname}&myip={ip}` + basic auth |
-| anything else | `https://<provider>/nic/update?myip={ip}` + basic auth |
+| Provider | Kind | Signup | Request |
+|---|---|---|---|
+| `sslip.io` (default) | derived | none | none — `62-228-88-158.sslip.io` resolves to `62.228.88.158` |
+| `nip.io`, `traefik.me` | derived | none | none — same scheme, different zone |
+| `xyz.frl` | registered | none (anonymous `GET /generate`) | `https://xyz.frl/nic/update?myip={ip}` + basic auth |
+| `duckdns` | registered | **yes** — OAuth login (GitHub/Google/…) for a token | `https://www.duckdns.org/update?domains={hostname}&token={password}&ip={ip}` |
+| `noip` | registered | **yes** | `https://dynupdate.no-ip.com/nic/update?hostname={hostname}&myip={ip}` + basic auth |
+| anything else | registered | depends | `https://<provider>/nic/update?myip={ip}` + basic auth |
+
+`updateUrl` overrides the template entirely; `{ip}`, `{hostname}`,
+`{username}` and `{password}` are substituted, and credentials are also
+sent as HTTP basic auth.
+
+**Which to pick.** `sslip.io` is the default because it works with nothing
+but the config line: it always resolves, there is no account, no token and
+no outbound update call. The trade is that the name changes when the
+address does — the dashboard, the banner and `systemctl status` always
+show the current one, and every change is in the log, so you re-copy the
+URL after a change rather than keeping a permanent bookmark. If you want a
+name that never changes, either use a provider you already have (point
+`updateUrl` at Cloudflare, your registrar's API, DuckDNS after a 30-second
+login) or try `xyz.frl`, noting the caveat below.
 
 > **Caveat on xyz.frl.** `scripts/deploy-remote.sh` can mint a free,
 > anonymous hostname there (`GET https://xyz.frl/generate`), and the

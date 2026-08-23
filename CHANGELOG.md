@@ -25,12 +25,15 @@ are no versioned releases yet: `main` is published continuously as the
   public IP every `dyndns.intervalMinutes` (default 5), records every
   change to `data/ip-history.json`, logs it as a `public_ip_changed`
   event, and pushes the address to a DynDNS-style provider (`xyz.frl` by
-  default, plus DuckDNS, No-IP or any `updateUrl` template). The URL shows
+  default: `sslip.io`, which needs no account, no credential and no update
+  request because the address is encoded in the name; plus `xyz.frl`,
+  DuckDNS, No-IP or any `updateUrl` template). The URL shows
   up in the startup banner, in `systemctl status` via `sd_notify`, in the
   dashboard's new **Stats → Public address** panel with the full change
   log, and at `GET /v1/pubaddr`. `scripts/deploy-remote.sh` can mint a
-  free anonymous hostname during install (step 3 of 5) and store the
-  credential at `data/dyndns.json` (0600). Caveat: xyz.frl accepted
+  public name during install (step 3 of 5): `sslip.io` by default with
+  nothing to store, or an anonymous `xyz.frl` name whose credential goes
+  to `data/dyndns.json` (0600). Caveat: xyz.frl accepted
   updates (HTTP 202) but its hostnames did not resolve when this was
   written — tracking and the change log do not depend on that.
 

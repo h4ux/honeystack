@@ -503,3 +503,22 @@ td .geo, .event .geo { font-family: var(--mono); }
   #hist-table td:last-child { overflow-wrap: anywhere; }
   .cmd-text { white-space: nowrap; }
 }
+
+/* Public address panel */
+.pubaddr-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+#pubaddr-host { font-family: var(--mono); text-transform: none; letter-spacing: 0; }
+#pubaddr-host a { color: var(--accent-2); text-decoration: none; }
+#pubaddr-host a:hover { text-decoration: underline; }
+#pubaddr-history { table-layout: fixed; }
+#pubaddr-history th:nth-child(4) { width: 130px; }
+#pubaddr-history th:nth-child(5) { width: 130px; }
+#pubaddr-history td:last-child { text-align: left; }
+.upd { padding: 1px 7px; border-radius: 999px; font-size: 11px; }
+.upd.ok { background: rgba(124,242,200,0.15); color: var(--ok); }
+.upd.warn { background: rgba(255,207,107,0.15); color: var(--warn); }
+.upd.err { background: rgba(255,107,139,0.15); color: var(--danger); }
+.upd.off { background: rgba(255,255,255,0.06); color: var(--muted); }
+@media (max-width: 720px) {
+  #pubaddr-history-wrap { overflow-x: auto; }
+  #pubaddr-history { min-width: 560px; }
+}

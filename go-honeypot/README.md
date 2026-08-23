@@ -314,6 +314,83 @@ Every event and session carries the source country when it is known:
   dashboard then shows `··` instead of a flag. Point `geoip.url` at your
   own service (with an `{ip}` placeholder) to self-host the lookup.
 
+## A stable address on a changing IP
+
+A honeypot on a dynamic IP silently breaks every bookmark when it is
+renumbered. The daemon tracks its own public address, records every change,
+and — when a dynamic-DNS credential is configured — keeps a hostname
+pointed at it.
+
+```jsonc
+"dyndns": {
+  "enabled": true,
+  "provider": "xyz.frl",                    // xyz.frl | duckdns | noip | custom
+  "credentialsFile": "data/dyndns.json",    // 0600, written at install time
+  "intervalMinutes": 5,
+  "ipCheckUrls": ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"],
+  "historyFile": "data/ip-history.json",
+  "maxHistory": 200
+}
+```
+
+Every `intervalMinutes` the daemon asks an echo service for its address
+(first one that answers with a valid IP wins) and pushes it to the
+provider. On a change it appends to `data/ip-history.json`, logs a
+`public_ip_changed` event — so it appears in the live feed, history and
+PDF like anything else — and refreshes the systemd status line.
+
+**Where you see it:**
+
+- **Startup banner**, so `journalctl -u honeypot-go` answers "what is the
+  URL again?":
+  ```
+  public address   : https://8355e9ec….xyz.frl   (dyndns: xyz.frl, refreshed every 5m)
+  ```
+- **`systemctl status honeypot-go`**, via `sd_notify`. The unit sets
+  `NotifyAccess=main` and the daemon publishes a status line that tracks
+  the current address:
+  ```
+  Status: "https://8355e9ec….xyz.frl · 203.0.113.9 · control :9090 · 41 listeners"
+  ```
+- **Dashboard → Stats → Public address**: the hostname as a link, current
+  IP, number of changes, when it was last checked/changed, the last update
+  result, and a table of every change (when, new address, previous
+  address, which echo service saw it, what the provider answered).
+- **`GET /v1/pubaddr`** (or the `get_pubaddr` action) for the same data.
+
+### Providers
+
+`provider` picks a URL template; `updateUrl` overrides it entirely.
+`{ip}`, `{hostname}`, `{username}` and `{password}` are substituted, and
+credentials are also sent as HTTP basic auth:
+
+| Provider | Request |
+|---|---|
+| `xyz.frl` (default) | `https://xyz.frl/nic/update?myip={ip}` + basic auth |
+| `duckdns` | `https://www.duckdns.org/update?domains={hostname}&token={password}&ip={ip}` |
+| `noip` | `https://dynupdate.no-ip.com/nic/update?hostname={hostname}&myip={ip}` + basic auth |
+| anything else | `https://<provider>/nic/update?myip={ip}` + basic auth |
+
+> **Caveat on xyz.frl.** `scripts/deploy-remote.sh` can mint a free,
+> anonymous hostname there (`GET https://xyz.frl/generate`), and the
+> service accepts updates (`HTTP 202`). At the time of writing the
+> generated names did **not** resolve — the authoritative nameserver
+> answered `NXDOMAIN` for a freshly updated hostname, with both a
+> documentation IP and a real public IP, minutes after a successful
+> update. Treat the hostname as best-effort until you have confirmed it
+> resolves for you (`getent hosts <name>`), and switch `provider` to
+> DuckDNS or your own DNS if it does not. **IP tracking, the change log
+> and the status line work regardless of the provider** — that part does
+> not depend on anyone publishing a record.
+
+Rate limits are respected: updates are never sent more than once a minute,
+`429` is recorded as `rate-limited` and retried on the next tick, and
+`401` shows as `unauthorized` rather than being retried blindly.
+
+**Privacy:** enabling this tells an IP-echo service and your DNS provider
+this host's address. Set `dyndns.enabled` to `false` to keep everything
+local; nothing else changes.
+
 ## Version check and updating
 
 The daemon reports what it is (`/v1/version`, and in the `hello` payload):

@@ -62,6 +62,7 @@ func (s *Server) restHello(w http.ResponseWriter, r *http.Request) {
 		"events":   s.store.Events(eventlog.EventFilter{Limit: 200}),
 		"build":    s.buildInfo(),
 		"geo":      s.geoStats(),
+		"pubaddr":  s.publicAddr(),
 	})
 }
 
@@ -124,6 +125,11 @@ func (s *Server) restGeo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) restVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.buildInfo())
+}
+
+// restPubAddr reports the tracked public address and its change history.
+func (s *Server) restPubAddr(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.publicAddr())
 }
 
 func (s *Server) restSession(w http.ResponseWriter, r *http.Request) {

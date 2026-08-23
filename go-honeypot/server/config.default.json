@@ -25,6 +25,19 @@
     "timeoutMs": 4000,
     "rateLimitPerMin": 40
   },
+  "dyndns": {
+    "enabled": false,
+    "provider": "xyz.frl",
+    "credentialsFile": "data/dyndns.json",
+    "intervalMinutes": 5,
+    "ipCheckUrls": [
+      "https://api.ipify.org",
+      "https://ifconfig.me/ip",
+      "https://icanhazip.com"
+    ],
+    "historyFile": "data/ip-history.json",
+    "maxHistory": 200
+  },
   "services": {
     "ssh": {
       "enabled": true,

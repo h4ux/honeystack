@@ -22,6 +22,8 @@ import (
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/geoip"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/honeypots"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/manager"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/pubaddr"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/sdnotify"
 )
 
 var (
@@ -77,6 +79,12 @@ func main() {
 	defer geo.Close()
 	store.SetGeo(geo)
 
+	// Public address tracking: keeps a hostname pointed at this host when
+	// its IP is not static, and records every change. Created before the
+	// banner so the banner can print the URL, started after the API is up.
+	tracker := pubaddr.New(cfg.Dyn(), store)
+	defer tracker.Close()
+
 	// Mirror events to stdout for operators. On a scanned host this goes to
 	// the systemd journal, so "all" is a real CPU and disk cost — the
 	// default keeps the lines that matter and drops connection noise.
@@ -110,10 +118,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("auth key: %v", err)
 	}
-	printBanner(cfg, authKey)
+	printBanner(cfg, authKey, tracker)
 
 	api := controlapi.New(store, mgr, func(newCfg config.Config) { mgr.Sync(newCfg) })
 	api.SetGeo(geo)
+	api.SetPublicAddr(tracker)
 	binPath, _ := os.Executable()
 	api.SetBuildInfo(controlapi.BuildInfo{
 		Version:   version,
@@ -133,10 +142,38 @@ func main() {
 
 	store.Log(eventlog.Event{Service: "system", Type: "startup", Details: map[string]any{"pid": os.Getpid()}})
 
+	// systemd shows this under the unit description, so `systemctl status`
+	// answers "what is the URL again?" without digging through the journal.
+	statusLine := func() string {
+		st := tracker.Status()
+		parts := []string{}
+		if st.URL != "" {
+			parts = append(parts, st.URL)
+		}
+		if st.IP != "" {
+			parts = append(parts, st.IP)
+		} else if st.Enabled {
+			parts = append(parts, "public IP pending")
+		}
+		parts = append(parts, fmt.Sprintf("control :%d", cfg.Control.Port))
+		parts = append(parts, fmt.Sprintf("%d listeners", len(mgr.List())))
+		return strings.Join(parts, " · ")
+	}
+	tracker.SetOnChange(func(st pubaddr.Status) {
+		sdnotify.Status(statusLine())
+		if st.URL != "" {
+			log.Printf("[pubaddr] reachable at %s (%s), updated %s",
+				st.URL, st.IP, st.UpdateStatus)
+		}
+	})
+	sdnotify.Ready(statusLine())
+	tracker.Start(ctx)
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	sig := <-stop
 	log.Printf("[system] received %s, shutting down…", sig)
+	sdnotify.Stopping("shutting down")
 
 	shutCtx, cancelShut := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelShut()
@@ -315,7 +352,7 @@ func formatEvent(e eventlog.Event) string {
 	return b.String()
 }
 
-func printBanner(cfg config.Config, key string) {
+func printBanner(cfg config.Config, key string, addr *pubaddr.Tracker) {
 	host := cfg.Control.Host
 	if host == "" || host == "0.0.0.0" {
 		host = "<your-server-ip>"
@@ -338,9 +375,32 @@ func printBanner(cfg config.Config, key string) {
 	} else {
 		fmt.Println("  geoip            : off")
 	}
+	if url := addr.URL(); url != "" {
+		fmt.Printf("  public address   : %s   (dyndns: %s, refreshed every %dm)\n",
+			url, providerName(cfg.Dyn()), intervalOf(cfg.Dyn()))
+	} else if cfg.Dyn().Enabled {
+		fmt.Println("  public address   : dyndns enabled but no hostname yet — see data/dyndns.json")
+	}
 	fmt.Printf("  control endpoint : ws://%s:%d/api\n", host, cfg.Control.Port)
 	fmt.Printf("  auth key         : %s\n", key)
 	fmt.Printf("  key file         : %s\n", cfg.Control.AuthKeyFile)
 	fmt.Println("  Connect the local webapp to this endpoint with the auth key above.")
 	fmt.Println(line)
+}
+
+func providerName(d config.DynDNS) string {
+	if d.Provider != "" {
+		return d.Provider
+	}
+	if d.UpdateURL != "" {
+		return "custom"
+	}
+	return "xyz.frl"
+}
+
+func intervalOf(d config.DynDNS) int {
+	if d.IntervalMinutes > 0 {
+		return d.IntervalMinutes
+	}
+	return 5
 }

@@ -19,6 +19,21 @@ are no versioned releases yet: `main` is published continuously as the
 - `.github/dependabot.yml` now watches Go modules (with the vendor tree),
   npm and GitHub Actions weekly, and CI runs `govulncheck` on every PR.
 
+### Added
+
+- **Public address tracking and dynamic DNS.** The daemon polls its own
+  public IP every `dyndns.intervalMinutes` (default 5), records every
+  change to `data/ip-history.json`, logs it as a `public_ip_changed`
+  event, and pushes the address to a DynDNS-style provider (`xyz.frl` by
+  default, plus DuckDNS, No-IP or any `updateUrl` template). The URL shows
+  up in the startup banner, in `systemctl status` via `sd_notify`, in the
+  dashboard's new **Stats → Public address** panel with the full change
+  log, and at `GET /v1/pubaddr`. `scripts/deploy-remote.sh` can mint a
+  free anonymous hostname during install (step 3 of 5) and store the
+  credential at `data/dyndns.json` (0600). Caveat: xyz.frl accepted
+  updates (HTTP 202) but its hostnames did not resolve when this was
+  written — tracking and the change log do not depend on that.
+
 ### Documentation
 
 - New [`docs/`](./docs) folder: [architecture.md](./docs/architecture.md)

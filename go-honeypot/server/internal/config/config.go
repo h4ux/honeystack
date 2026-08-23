@@ -38,6 +38,26 @@ type Storage struct {
 	StdoutEvents   string `json:"stdoutEvents,omitempty"`
 }
 
+// DynDNS keeps a stable hostname pointing at this host when its public IP
+// is not static, and records every change. Credentials live in a separate
+// 0600 file (CredentialsFile) rather than in config.json, which the
+// dashboard rewrites and which is world-readable.
+type DynDNS struct {
+	Enabled         bool   `json:"enabled"`
+	Provider        string `json:"provider,omitempty"` // xyz.frl | duckdns | custom
+	CredentialsFile string `json:"credentialsFile,omitempty"`
+	Hostname        string `json:"hostname,omitempty"`
+	Username        string `json:"username,omitempty"`
+	Password        string `json:"password,omitempty"`
+	// UpdateURL overrides the provider. {ip}, {hostname}, {username} and
+	// {password} are substituted before the request.
+	UpdateURL       string   `json:"updateUrl,omitempty"`
+	IntervalMinutes int      `json:"intervalMinutes,omitempty"`
+	IPCheckURLs     []string `json:"ipCheckUrls,omitempty"`
+	HistoryFile     string   `json:"historyFile,omitempty"`
+	MaxHistory      int      `json:"maxHistory,omitempty"`
+}
+
 // GeoIP controls country lookups for attacker IPs. Lookups go to a public
 // HTTP service, so disabling this keeps every address on the box.
 type GeoIP struct {
@@ -84,6 +104,7 @@ type Config struct {
 	Control  Control            `json:"control"`
 	Storage  Storage            `json:"storage"`
 	GeoIP    *GeoIP             `json:"geoip,omitempty"`
+	DynDNS   *DynDNS            `json:"dyndns,omitempty"`
 	Services map[string]Service `json:"services"`
 }
 
@@ -169,6 +190,14 @@ func writeJSON(path string, c Config) error {
 	return nil
 }
 
+// Dyn returns the dyndns block, or a disabled one when absent.
+func (c Config) Dyn() DynDNS {
+	if c.DynDNS == nil {
+		return DynDNS{Enabled: false}
+	}
+	return *c.DynDNS
+}
+
 // Geo returns the geoip block with defaults filled in, so callers never
 // have to nil-check it.
 func (c Config) Geo() GeoIP {
@@ -218,6 +247,9 @@ func merge(base, override Config) Config {
 	}
 	if override.GeoIP != nil {
 		out.GeoIP = override.GeoIP
+	}
+	if override.DynDNS != nil {
+		out.DynDNS = override.DynDNS
 	}
 	if override.Services != nil {
 		if out.Services == nil {

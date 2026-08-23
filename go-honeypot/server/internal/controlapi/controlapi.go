@@ -31,6 +31,7 @@ import (
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/geoip"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/manager"
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/pubaddr"
 )
 
 type SyncFunc func(cfg config.Config)
@@ -64,11 +65,27 @@ type Server struct {
 	manager *manager.Manager
 	sync    SyncFunc
 	geo     GeoLookup
+	pubaddr PublicAddr
 	build   BuildInfo
 
 	authKey string
 	http    *http.Server
 	origins []string
+}
+
+// PublicAddr is the subset of internal/pubaddr the API needs.
+type PublicAddr interface {
+	Status() pubaddr.Status
+}
+
+// SetPublicAddr exposes public-IP tracking over the API.
+func (s *Server) SetPublicAddr(p PublicAddr) { s.pubaddr = p }
+
+func (s *Server) publicAddr() any {
+	if s.pubaddr == nil {
+		return map[string]any{"enabled": false}
+	}
+	return s.pubaddr.Status()
 }
 
 // GeoLookup is the subset of internal/geoip the API needs.
@@ -149,6 +166,7 @@ func (s *Server) Start(ctx context.Context, cfg config.Control, authKey string) 
 	mux.HandleFunc("/v1/config", s.withAuth(s.restConfig))
 	mux.HandleFunc("/v1/geo", s.withAuth(s.restGeo))
 	mux.HandleFunc("/v1/version", s.withAuth(s.restVersion))
+	mux.HandleFunc("/v1/pubaddr", s.withAuth(s.restPubAddr))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("honeypot control-plane is up.\nWebSocket: ws://" + r.Host + "/api?token=<AUTH_KEY>\nREST: /v1/* with Authorization: Bearer <AUTH_KEY>\n"))
@@ -267,6 +285,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		"events":   s.store.Events(eventlog.EventFilter{Limit: 200}),
 		"build":    s.buildInfo(),
 		"geo":      s.geoStats(),
+		"pubaddr":  s.publicAddr(),
 	})}); err != nil {
 		return
 	}
@@ -372,6 +391,8 @@ func (s *Server) handleCommand(c *client, msg Message) {
 		reply(map[string]any{"locations": s.geoBatch(req.IPs), "geo": s.geoStats()})
 	case "get_version":
 		reply(s.buildInfo())
+	case "get_pubaddr":
+		reply(s.publicAddr())
 	case "ping":
 		reply(map[string]any{"pong": time.Now().UnixMilli()})
 	default:

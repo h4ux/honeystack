@@ -75,6 +75,9 @@ graph TD
    to `data/auth.key` (0600). A new key every start, by design.
 9. **`api.Start`** — bind the control port, serve `/api` (WebSocket) and
    `/v1/*` (REST).
+9b. **`tracker.Start`** — begin polling the public IP, refresh the DynDNS
+   record, and publish the systemd status line (`sd_notify`) that
+   `systemctl status` prints.
 10. **Wait for SIGINT/SIGTERM**, then shut the API down with a 5-second
     timeout; deferred calls stop listeners, flush the log and save the
     geo cache.
@@ -144,6 +147,7 @@ manager's goroutine while handlers are reading it.
 | TCP connection handler | one per connection | until close or idle timeout |
 | UDP read loop | one per UDP listener | until `Stop()` |
 | eventlog flusher | 1 | process |
+| pubaddr poller | 1 (when `dyndns.enabled`) | process |
 | geoip worker + cache flusher | 2 | process |
 | HTTP server (control API) | 1 + one per request | process |
 | WebSocket client | reader + ping writer per client | until disconnect |

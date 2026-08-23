@@ -34,6 +34,10 @@
 #                          (default: honeypot)
 #       --memory MB        daemon memory budget (default 192; sets
 #                          GOMEMLIMIT, MemoryHigh and MemoryMax)
+#       --skip-dyndns      do not offer a dynamic-DNS hostname
+#       --dyndns-user U    use an existing credential instead of creating one
+#       --dyndns-pass P    (with --dyndns-host)
+#       --dyndns-host H
 #       --skip-binary      do not touch /usr/local/bin/honeypot
 #       --skip-ssh         leave the real sshd where it is
 #       --skip-service     do not install/start the systemd unit
@@ -66,6 +70,10 @@ DO_BINARY=1
 DO_SSH=1
 DO_SERVICE=1
 DO_FIREWALL=1
+DO_DYNDNS=1
+DYNDNS_USER=""
+DYNDNS_PASS=""
+DYNDNS_HOST=""
 ADMIN_USER="${SUDO_USER:-}"
 
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/main/go-honeypot/server"
@@ -99,6 +107,10 @@ while [[ $# -gt 0 ]]; do
     --skip-ssh)      DO_SSH=0; shift ;;
     --skip-service)  DO_SERVICE=0; shift ;;
     --skip-firewall|--keep-firewall) DO_FIREWALL=0; shift ;;
+    --skip-dyndns)   DO_DYNDNS=0; shift ;;
+    --dyndns-user)   DYNDNS_USER="${2:?}"; shift 2 ;;
+    --dyndns-pass)   DYNDNS_PASS="${2:?}"; shift 2 ;;
+    --dyndns-host)   DYNDNS_HOST="${2:?}"; shift 2 ;;
     -h|--help)       sed -n '2,60p' "$0" | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
@@ -205,7 +217,7 @@ fi
 
 # ============================================================ step 1: bin
 install_binary() {
-  step "Step 1/4 — honeypot binary (${ASSET})"
+  step "Step 1/5 — honeypot binary (${ASSET})"
   note "picks the release asset that matches this OS/CPU, verifies its"
   note "SHA-256 when the release publishes SHA256SUMS, and installs it to"
   note "${BIN_PATH}"
@@ -325,7 +337,7 @@ PY
 
 # ============================================================ step 2: ssh
 move_real_sshd() {
-  step "Step 2/4 — move the real sshd to port ${SSH_PORT}"
+  step "Step 2/5 — move the real sshd to port ${SSH_PORT}"
   note "backs up /etc/ssh/sshd_config, rewrites Port, validates with"
   note "'sshd -t' (restoring the backup if it fails), then restarts sshd."
   note "Your current session stays open; new logins use port ${SSH_PORT}."
@@ -418,9 +430,100 @@ EOF
   ask "Did that work (or do you want to continue anyway)?" y || die "stopping here. Your old session is still open; fix SSH first (backup: $backup)."
 }
 
+# ==================================================== step 2b: public name
+configure_dyndns() {
+  step "Step 3/5 — a stable hostname for this box"
+  note "A honeypot on a dynamic IP loses its dashboard bookmark every time"
+  note "the address changes. xyz.frl hands out a free, anonymous DynDNS"
+  note "hostname (no signup); the daemon then refreshes it every 5 minutes"
+  note "and records every address change in its own log."
+  note "Whatever you choose, the daemon still tracks and logs IP changes."
+
+  if (( ! DO_DYNDNS )); then warn "skipped (--skip-dyndns)"; return; fi
+
+  if [[ -n "$DYNDNS_USER" && -n "$DYNDNS_PASS" ]]; then
+    log "using the credentials passed on the command line"
+  else
+    if ! ask "Create a free dynamic-DNS hostname at xyz.frl for this host?" y; then
+      warn "no hostname — IP changes are still tracked and logged"
+      return
+    fi
+    log "requesting a hostname from https://xyz.frl/generate"
+    local json
+    json="$(curl -fsSL --show-error -m 20 https://xyz.frl/generate 2>&1)" || {
+      warn "could not reach xyz.frl: ${json}"
+      note "re-run later, or set dyndns.* in ${INSTALL_DIR}/config.json by hand"
+      return
+    }
+    DYNDNS_HOST="$(printf '%s' "$json" | sed -n 's/.*"hostname"[: ]*"\([^"]*\)".*/\1/p')"
+    DYNDNS_USER="$(printf '%s' "$json" | sed -n 's/.*"username"[: ]*"\([^"]*\)".*/\1/p')"
+    DYNDNS_PASS="$(printf '%s' "$json" | sed -n 's/.*"password"[: ]*"\([^"]*\)".*/\1/p')"
+    if [[ -z "$DYNDNS_HOST" || -z "$DYNDNS_USER" || -z "$DYNDNS_PASS" ]]; then
+      warn "unexpected response from xyz.frl: $(printf '%s' "$json" | head -c 120)"
+      return
+    fi
+    ok "hostname: ${DYNDNS_HOST}"
+  fi
+
+  install -d -o "$SVC_USER" -g "$SVC_USER" -m 0750 "$INSTALL_DIR/data" 2>/dev/null || install -d -m 0750 "$INSTALL_DIR/data"
+  cat > "$INSTALL_DIR/data/dyndns.json" <<EOF
+{
+  "hostname": "${DYNDNS_HOST}",
+  "username": "${DYNDNS_USER}",
+  "password": "${DYNDNS_PASS}"
+}
+EOF
+  chmod 0600 "$INSTALL_DIR/data/dyndns.json"
+  id "$SVC_USER" &>/dev/null && chown "$SVC_USER":"$SVC_USER" "$INSTALL_DIR/data/dyndns.json"
+  ok "credentials stored in ${INSTALL_DIR}/data/dyndns.json (0600)"
+
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$INSTALL_DIR/config.json" ]]; then
+    python3 - "$INSTALL_DIR/config.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    cfg = json.load(f)
+dyn = cfg.setdefault("dyndns", {})
+dyn["enabled"] = True
+dyn.setdefault("provider", "xyz.frl")
+dyn.setdefault("credentialsFile", "data/dyndns.json")
+dyn.setdefault("intervalMinutes", 5)
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+PY
+    ok "dyndns enabled in config.json (refresh every 5 minutes)"
+  else
+    warn "could not edit config.json — set dyndns.enabled to true by hand"
+  fi
+
+  # Prove it end to end rather than assuming.
+  local ip
+  ip="$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)"
+  if [[ -n "$ip" ]]; then
+    local code
+    code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 --user "${DYNDNS_USER}:${DYNDNS_PASS}" \
+             "https://xyz.frl/nic/update?myip=${ip}" || true)"
+    case "$code" in
+      2*) ok "first update accepted (HTTP ${code}) for ${ip}" ;;
+      429) warn "provider rate-limited the first update (HTTP 429) — the daemon will retry" ;;
+      *)  warn "first update returned HTTP ${code:-none}; the daemon will keep trying" ;;
+    esac
+    sleep 3
+    if command -v getent >/dev/null 2>&1 && getent hosts "$DYNDNS_HOST" >/dev/null 2>&1; then
+      ok "${DYNDNS_HOST} resolves"
+    else
+      warn "${DYNDNS_HOST} does not resolve yet"
+      note "xyz.frl accepts updates but may take time to publish (or may not"
+      note "publish at all). Reach the box by IP meanwhile; the dashboard's"
+      note "Public address panel shows every change either way. To use a"
+      note "different provider set dyndns.provider/updateUrl in config.json."
+    fi
+  fi
+}
+
 # ======================================================== step 3: service
 install_service() {
-  step "Step 3/4 — install and start ${SERVICE_NAME}.service"
+  step "Step 4/5 — install and start ${SERVICE_NAME}.service"
   note "creates the '${SVC_USER}' system account, a data directory under"
   note "${INSTALL_DIR}/data, a systemd unit that grants only"
   note "CAP_NET_BIND_SERVICE, then enables and starts it."
@@ -455,6 +558,9 @@ ExecStart=${BIN_PATH} --defaults ${INSTALL_DIR}/config.default.json --config ${I
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=65535
+# Lets the daemon publish the "Status:" line that systemctl status prints,
+# which is where the public URL and current IP show up.
+NotifyAccess=main
 # A soft limit makes Go collect harder instead of the kernel OOM-killing the
 # daemon; MemoryHigh throttles it before MemoryMax would kill it. Raise both
 # (and storage.maxLogRows) on a box with memory to spare.
@@ -506,7 +612,7 @@ PORTS
 }
 
 configure_firewall() {
-  step "Step 4/4 — host firewall"
+  step "Step 5/5 — host firewall"
   note "A honeypot is only useful if the decoy ports answer, so the usual"
   note "choice is to disable the host firewall entirely. That leaves NOTHING"
   note "filtered on this machine — including the real sshd on ${SSH_PORT}."
@@ -575,8 +681,13 @@ summary() {
   fi
 
   step "Done"
+  local dyn_line="not configured (IP changes are still tracked)"
+  if [[ -n "$DYNDNS_HOST" ]]; then
+    dyn_line="https://${DYNDNS_HOST}  (refreshed every 5 min)"
+  fi
   cat <<SUM
   real SSH      : ssh -p ${SSH_PORT} ${ADMIN_USER:-<user>}@${ip}
+  public name   : ${dyn_line}
   service       : systemctl status ${SERVICE_NAME}   ·   journalctl -u ${SERVICE_NAME} -f
   binary        : ${BIN_PATH}
   config        : ${INSTALL_DIR}/config.json
@@ -600,6 +711,7 @@ SUM
 
 install_binary
 move_real_sshd
+configure_dyndns
 install_service
 configure_firewall
 summary

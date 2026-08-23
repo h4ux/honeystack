@@ -22,6 +22,8 @@ which is the install directory (`WorkingDirectory=` in the systemd unit).
     ├── events.ndjson                append-only event log
     ├── events.ndjson.1              one rotated generation
     ├── geoip-cache.json             IP → country cache
+    ├── dyndns.json                  0600, dynamic-DNS credentials
+    ├── ip-history.json              this host's public IP over time
     └── ssh_host_ed25519_key         0600, generated once, then stable
 
 /usr/local/bin/honeypot              the binary
@@ -38,7 +40,9 @@ Which paths the daemon uses is configurable:
   "hostKeyFile": "data/ssh_host_ed25519_key"
 },
 "control": { "authKeyFile": "data/auth.key" },
-"geoip":   { "cacheFile":   "data/geoip-cache.json" }
+"geoip":   { "cacheFile":   "data/geoip-cache.json" },
+"dyndns":  { "credentialsFile": "data/dyndns.json",
+             "historyFile":     "data/ip-history.json" }
 ```
 
 ## Every file, and the pattern it is written with
@@ -51,16 +55,19 @@ Which paths the daemon uses is configurable:
 | `data/auth.key` | `internal/controlapi` | once per process start | truncate + write | **0600** |
 | `data/ssh_host_ed25519_key` | `internal/honeypots` (ssh) | first SSH start only | write if absent | **0600** |
 | `data/geoip-cache.json` | `internal/geoip` | every 2 min if dirty, and on shutdown | **temp + rename** (atomic) | 0644 |
+| `data/ip-history.json` | `internal/pubaddr` | on every public-IP change | **temp + rename** (atomic) | 0644 |
+| `data/dyndns.json` | the installer (or you) | once, at install | **temp + rename** (atomic) | **0600** |
 
 Three different patterns, chosen per file:
 
 - **Append-only** for the event log. Events are immutable, so appending is
   the cheapest durable thing and a partial line at the tail is
   recoverable — the replay path skips lines that do not parse.
-- **Temp + rename** for the two files that are *replaced* wholesale
-  (`config.json`, `geoip-cache.json`). `rename(2)` is atomic within a
-  filesystem, so a crash mid-write leaves the previous version intact
-  rather than a truncated file the daemon cannot parse on boot.
+- **Temp + rename** for the files that are *replaced* wholesale
+  (`config.json`, `geoip-cache.json`, `ip-history.json`, `dyndns.json`).
+  `rename(2)` is atomic within a filesystem, so a crash mid-write leaves
+  the previous version intact rather than a truncated file the daemon
+  cannot parse on boot.
 - **Write-once** for the secrets. The auth key is rewritten each start (it
   is meant to rotate); the SSH host key is written only if missing, so an
   attacker sees a stable host fingerprint across restarts.
@@ -191,7 +198,13 @@ sudo tar czf honeystack-backup.tgz \
 ```
 
 Keeping the SSH host key means attackers see the same fingerprint after a
-rebuild. Do **not** back up `auth.key` — it is regenerated per start.
+rebuild. Add `data/dyndns.json` if you want to keep the same hostname. Do
+**not** back up `auth.key` — it is regenerated per start.
+
+`data/ip-history.json` is a plain array of `{ts, ip, previousIp, source,
+hostname, update, httpStatus, first}` objects, newest last, capped at
+`dyndns.maxHistory`. It is also what the daemon reads on boot to avoid
+recording a spurious change after a restart.
 
 **Shrink a log that already grew** (rotation only applies going forward):
 

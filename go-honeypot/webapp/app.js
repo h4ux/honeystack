@@ -23,6 +23,7 @@
     statsTimer: null,
     build: null,
     release: null,
+    pubaddr: null,
     geoStats: null,
     geoByIp: new Map(),
     geoPending: new Set(),
@@ -246,6 +247,7 @@
       get_stats: ['GET', '/v1/stats'],
       get_range: ['GET', '/v1/range'],
       get_version: ['GET', '/v1/version'],
+      get_pubaddr: ['GET', '/v1/pubaddr'],
       ping: ['GET', '/health']
     };
     let method = 'GET';
@@ -317,6 +319,7 @@
         state.services = msg.payload.services;
         state.build = msg.payload.build || null;
         state.geoStats = msg.payload.geo || null;
+        state.pubaddr = msg.payload.pubaddr || null;
         renderUpdateState();
         checkForUpdate(false);
         state.events = msg.payload.events || [];
@@ -364,7 +367,7 @@
     if (tab === 'history') initHistory();
     if (tab === 'services') refreshServices();
     if (tab === 'config') loadConfig();
-    if (tab === 'stats') refreshStats(true);
+    if (tab === 'stats') { refreshStats(true); refreshPublicAddress(); }
   }
 
   // ---- Live ----
@@ -911,6 +914,9 @@
         : '—'],
       ['Started', build.startedAt ? `${new Date(build.startedAt).toLocaleString()} (up ${uptime(build.startedAt)})` : '—'],
       ['Repository', repoName()],
+      ['Public address', state.pubaddr && state.pubaddr.url
+        ? `${state.pubaddr.url}${state.pubaddr.ip ? ' → ' + state.pubaddr.ip : ''}`
+        : (state.pubaddr && state.pubaddr.ip ? state.pubaddr.ip : 'not configured')],
       ['Latest release', rel.name ? `${rel.name}${rel.publishedAt ? ' · ' + new Date(rel.publishedAt).toLocaleString() : ''}` : (rel.error ? 'unavailable' : '—')],
       ['GeoIP', geoStatusText()]
     ];
@@ -1098,6 +1104,7 @@
     $('#stats-peak').textContent = s.peakHour ? `busiest hour ${s.peakHour} UTC (${num(s.peakHourCount)})` : '';
 
     drawStatsCharts(s, timeline);
+    renderPublicAddress();
 
     tableRows('#stats-ips', s.topIps, (r) => {
       const row = { remoteIp: r.key };
@@ -1146,6 +1153,69 @@
       </tr>`).join('');
     $('#stats-service-wrap').hidden = !svcRows.length;
     $('#stats-service-title').hidden = !svcRows.length;
+  }
+
+  // ---- Public address ----
+  // The daemon tracks the host's public IP and (optionally) keeps a DynDNS
+  // hostname pointed at it. Every change is logged here so a moved box is
+  // obvious rather than mysterious.
+  async function refreshPublicAddress() {
+    try {
+      const st = await send('get_pubaddr', {});
+      state.pubaddr = st;
+      renderPublicAddress();
+    } catch { /* older daemons have no pubaddr action */ }
+  }
+
+  function updateBadge(status) {
+    const text = String(status || '');
+    let cls = 'off';
+    if (text === 'ok' || text === 'nochg' || text.startsWith('ok:')) cls = 'ok';
+    else if (text === 'rate-limited' || text === 'skipped') cls = 'warn';
+    else if (text.startsWith('error') || text === 'unauthorized') cls = 'err';
+    return `<span class="upd ${cls}">${escape(text || 'not configured')}</span>`;
+  }
+
+  function renderPublicAddress() {
+    const st = state.pubaddr;
+    const panel = $('#pubaddr-panel');
+    const title = $('#pubaddr-title');
+    if (!panel) return;
+    if (!st || (!st.enabled && !st.ip && !(st.history || []).length)) {
+      panel.hidden = true;
+      if (title) title.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    if (title) title.hidden = false;
+
+    $('#pubaddr-host').innerHTML = st.url
+      ? `<a href="${escape(st.url)}" target="_blank" rel="noreferrer">${escape(st.hostname)}</a>`
+      : (st.ip ? escape(st.ip) : 'no address yet');
+    $('#pubaddr-status').textContent = st.enabled
+      ? `${st.provider || 'dyndns'} · every ${st.intervalMinutes || 5} min`
+      : 'tracking only (dyndns disabled)';
+
+    const chips = [
+      chip('current IP', st.ip || 'unknown'),
+      chip('changes recorded', num(st.changes || 0)),
+      chip('last checked', st.lastCheck ? ago(st.lastCheck) : 'never'),
+      chip('last change', st.lastChange ? ago(st.lastChange) : 'none'),
+      `<span class="chip">last DNS update ${updateBadge(st.updateStatus)}</span>`
+    ];
+    $('#pubaddr-summary').innerHTML = chips.join('');
+
+    const rows = st.history || [];
+    $('#pubaddr-history tbody').innerHTML = rows.length
+      ? rows.map((h) => `
+        <tr>
+          <td data-label="When">${escape(shortStamp(h.ts))}</td>
+          <td data-label="Address">${escape(h.ip || '')}${h.first ? ' <span class="muted">(first seen)</span>' : ''}</td>
+          <td data-label="Previous">${escape(h.previousIp || '—')}</td>
+          <td data-label="Seen via">${escape(h.source || '')}</td>
+          <td data-label="DNS update">${updateBadge(h.update)}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="5" class="muted">no address changes recorded yet</td></tr>';
   }
 
   function drawStatsCharts(s, timeline) {

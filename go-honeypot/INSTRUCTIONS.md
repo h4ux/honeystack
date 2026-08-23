@@ -235,6 +235,42 @@ What each setting costs is documented in
 [README.md](./README.md#what-it-stores-where-and-for-how-long), including
 sizing profiles for 512 MB / 1 GB / 4 GB hosts.
 
+## 2f. A hostname that survives an IP change
+
+The installer offers to mint a free, anonymous dynamic-DNS hostname
+(`xyz.frl`) and stores the credential in
+`/opt/honeystack/data/dyndns.json` (0600). After that the daemon refreshes
+it every 5 minutes and records every address change.
+
+Where to see the address:
+
+```bash
+systemctl status honeypot-go      # the Status: line carries the URL and current IP
+journalctl -u honeypot-go | grep pubaddr
+curl -s "http://127.0.0.1:9090/v1/pubaddr?token=$(sudo cat /opt/honeystack/data/auth.key)" | jq
+```
+
+and in the dashboard under **Stats → Public address**, with the full change
+log.
+
+To add or change it later, write the credentials file and enable the block:
+
+```bash
+sudo tee /opt/honeystack/data/dyndns.json >/dev/null <<'EOF'
+{"hostname": "example.duckdns.org", "username": "", "password": "<token>"}
+EOF
+sudo chmod 600 /opt/honeystack/data/dyndns.json
+sudo chown honeypot:honeypot /opt/honeystack/data/dyndns.json
+# then set dyndns.enabled true (and provider, e.g. "duckdns") in config.json
+sudo systemctl restart honeypot-go
+```
+
+If the hostname does not resolve, check what the provider answered — the
+Public address panel and `/v1/pubaddr` show the last update result
+(`ok`, `rate-limited`, `unauthorized`, or the error). Note that xyz.frl
+accepted updates but was not publishing records when this was written; IP
+tracking and the change log work regardless of provider.
+
 ## 3. Reconnect on the new SSH port
 
 ```bash

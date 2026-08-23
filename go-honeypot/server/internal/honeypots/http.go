@@ -47,6 +47,7 @@ func (h *HTTP) Start() error {
 	if err != nil {
 		return err
 	}
+	l = Guard(l)
 	go func() {
 		if err := h.server.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			h.store.Log(eventlog.Event{Service: "http", Type: "server_error", Details: map[string]any{"error": err.Error()}})

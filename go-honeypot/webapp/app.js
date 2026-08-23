@@ -24,6 +24,7 @@
     build: null,
     release: null,
     pubaddr: null,
+    blocklist: null,
     geoStats: null,
     geoByIp: new Map(),
     geoPending: new Set(),
@@ -256,6 +257,7 @@
       get_range: ['GET', '/v1/range'],
       get_version: ['GET', '/v1/version'],
       get_pubaddr: ['GET', '/v1/pubaddr'],
+      get_blocklist: ['GET', '/v1/blocklist'],
       ping: ['GET', '/health']
     };
     let method = 'GET';
@@ -277,6 +279,10 @@
       if (payload?.until) q.set('until', String(payload.until));
       q.set('limit', String(payload?.limit || 200));
       path = '/v1/sessions?' + q;
+    } else if (type === 'block_ip') {
+      method = 'POST'; path = '/v1/blocklist'; body = JSON.stringify(payload);
+    } else if (type === 'unblock_ip') {
+      method = 'DELETE'; path = '/v1/blocklist?value=' + encodeURIComponent(payload.value);
     } else if (type === 'geo_lookup') {
       const ips = (payload && payload.ips) || [];
       path = '/v1/geo?ips=' + encodeURIComponent(ips.join(','));
@@ -328,6 +334,7 @@
         state.build = msg.payload.build || null;
         state.geoStats = msg.payload.geo || null;
         state.pubaddr = msg.payload.pubaddr || null;
+        state.blocklist = msg.payload.blocklist || null;
         // First successful connection teaches the dashboard where to look
         // next time — this is what makes an address change survivable.
         rememberBeaconFromServer();
@@ -379,6 +386,7 @@
     if (tab === 'services') refreshServices();
     if (tab === 'config') loadConfig();
     if (tab === 'stats') { refreshStats(true); refreshPublicAddress(); }
+    if (tab === 'blocked') refreshBlocklist();
   }
 
   // ---- Live ----
@@ -457,7 +465,7 @@
       <span class="time">${escape(time)}</span>
       <span class="service">${svcIcon(evt.service, 13)}${escape(evt.service)}</span>
       <span class="type">${escape(evt.type)}</span>
-      <span class="ip">${escape(ip)}${port ? ':' + port : ''} ${ip ? geoBadge(evt) : ''}</span>
+      <span class="ip">${escape(ip)}${port ? ':' + port : ''} ${ip ? geoBadge(evt) : ''}${ip ? blockButton(ip) : ''}</span>
       <span class="details-wrap">${feedDetails(evt, details.trim())}</span>
       <span class="badge">→ :${localPort || ''}</span>
     `;
@@ -569,7 +577,7 @@
       const s = await send('get_session', { id });
       $('#session-meta').innerHTML = `
         Session <b>${escape(s.id)}</b> · ${svcIcon(s.service, 14)}${escape(s.service)} ·
-        from <b>${escape(s.remoteIp || '')}</b> ${s.remoteIp ? geoBadge(s) : ''}${s.org ? ' <span class="muted">' + escape(s.org) + '</span>' : ''} · user <b>${escape(s.username || '')}</b> ·
+        from <b>${escape(s.remoteIp || '')}</b> ${s.remoteIp ? geoBadge(s) + blockButton(s.remoteIp) : ''}${s.org ? ' <span class="muted">' + escape(s.org) + '</span>' : ''} · user <b>${escape(s.username || '')}</b> ·
         opened ${escape(new Date(s.openedAt).toLocaleString())}
         ${s.closedAt ? ' · closed ' + escape(new Date(s.closedAt).toLocaleString()) : ' · <span style="color:var(--ok)">active</span>'}
       `;
@@ -710,6 +718,135 @@
       $('#config-editor').value = JSON.stringify(state.config, null, 2);
       $('#config-status').textContent = '';
     } catch (err) { $('#config-status').textContent = err.message; }
+  }
+
+  // ---- Blocklist ----
+  // Blocking is about signal, not defence: one scanner can push thousands
+  // of events a minute through the ring and evict everything interesting.
+  // The daemon drops the traffic at accept time, so a blocked source costs
+  // a map lookup and nothing else.
+  async function refreshBlocklist() {
+    try {
+      state.blocklist = await send('get_blocklist', {});
+      renderBlocklist();
+    } catch (err) { console.warn(err); }
+  }
+
+  async function blockAddress(value, reason) {
+    if (!value) return;
+    try {
+      state.blocklist = await send('block_ip', { value, reason: reason || 'blocked from dashboard' });
+      renderBlocklist();
+      toast(`Blocked ${value}`);
+      // Blocked traffic stops arriving, so drop what is on screen too.
+      rerenderFeed();
+    } catch (err) {
+      toast('Could not block: ' + err.message, true);
+    }
+  }
+
+  async function unblockAddress(value) {
+    try {
+      state.blocklist = await send('unblock_ip', { value });
+      renderBlocklist();
+      toast(`Unblocked ${value}`);
+    } catch (err) {
+      toast('Could not unblock: ' + err.message, true);
+    }
+  }
+
+  function isBlocked(ip) {
+    const entries = (state.blocklist && state.blocklist.entries) || [];
+    return entries.some((e) => e.value === ip);
+  }
+
+  // A one-click block button to sit next to an address.
+  function blockButton(ip) {
+    if (!ip) return '';
+    if (isBlocked(ip)) return '<span class="block-btn" title="already blocked">blocked</span>';
+    return `<button type="button" class="block-btn" data-block="${escape(ip)}" title="Block ${escape(ip)} — drops its traffic on arrival">block</button>`;
+  }
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest ? e.target.closest('[data-block]') : null;
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();          // do not also open the row's session
+    blockAddress(btn.dataset.block);
+  }, true);
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest ? e.target.closest('[data-unblock]') : null;
+    if (!btn) return;
+    e.preventDefault();
+    unblockAddress(btn.dataset.unblock);
+  }, true);
+
+  const blockForm = $('#block-add');
+  if (blockForm) blockForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#block-error').textContent = '';
+    const value = $('#block-value').value.trim();
+    const reason = $('#block-reason').value.trim();
+    try {
+      state.blocklist = await send('block_ip', { value, reason });
+      $('#block-value').value = '';
+      $('#block-reason').value = '';
+      renderBlocklist();
+    } catch (err) {
+      $('#block-error').textContent = err.message;
+    }
+  });
+
+  function renderBlocklist() {
+    const list = state.blocklist;
+    const rows = (list && list.entries) || [];
+    const body = $('#block-table tbody');
+    if (!body) return;
+    body.innerHTML = rows.length
+      ? rows.map((e) => `
+        <tr>
+          <td data-label="Address">${escape(e.value)}</td>
+          <td data-label="Reason">${escape(e.reason || '—')}</td>
+          <td data-label="Blocked">${escape(shortStamp(e.addedAt))}</td>
+          <td data-label="By">${escape(e.addedBy || '—')}</td>
+          <td data-label="Dropped">${num(e.hits || 0)}</td>
+          <td data-label="Last seen">${e.lastHit ? escape(ago(e.lastHit)) : '—'}</td>
+          <td><button type="button" class="ghost unblock" data-unblock="${escape(e.value)}">Unblock</button></td>
+        </tr>`).join('')
+      : '<tr><td colspan="7" class="muted">nothing blocked — hover an address in the feed or the stats tables and press “block”</td></tr>';
+
+    const dropped = rows.reduce((a, e) => a + (e.hits || 0), 0);
+    $('#block-summary').textContent = rows.length
+      ? `${rows.length} blocked · ${num(dropped)} connections or datagrams dropped since the daemon started`
+      : '';
+
+    // The daemon runs unprivileged, so this is application-level. Offer the
+    // kernel-level equivalent for anyone who wants the packets gone earlier.
+    const hint = $('#block-firewall');
+    if (hint) {
+      hint.innerHTML = rows.length
+        ? 'Dropped inside the daemon (it runs unprivileged, so it cannot touch the firewall). ' +
+          'To drop them at the kernel instead, run on the host:' +
+          `<pre>${rows.slice(0, 20).map((e) => `sudo nft add rule inet filter input ip saddr ${escape(e.value)} drop`).join('\n')}</pre>`
+        : '';
+    }
+  }
+
+  function toast(message, isError) {
+    let el = $('#toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'toast';
+      el.className = 'chart-tip';
+      el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:300;';
+      document.body.appendChild(el);
+    }
+    el.textContent = message;
+    el.style.borderColor = isError ? 'var(--danger)' : 'var(--border)';
+    el.hidden = false;
+    clearTimeout(el.__t);
+    el.__t = setTimeout(() => { el.hidden = true; }, 2200);
   }
 
   // ---- Beacon ----
@@ -1282,7 +1419,8 @@
 
     tableRows('#stats-ips', s.topIps, (r) => {
       const row = { remoteIp: r.key };
-      return [escape(r.key), geoBadge(row) + ' ' + escape(geoLabel(row).replace(/^\S+\s*/, '')), num(r.count)];
+      return [escape(r.key) + blockButton(r.key),
+        geoBadge(row) + ' ' + escape(geoLabel(row).replace(/^\S+\s*/, '')), num(r.count)];
     }, true);
     tableRows('#stats-countries', s.topCountries, (r) => [
       `${flagEmoji(r.code)} ${escape(r.name || r.code || 'unknown')}`,

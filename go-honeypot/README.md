@@ -333,6 +333,39 @@ Every event and session carries the source country when it is known:
   dashboard then shows `··` instead of a flag. Point `geoip.url` at your
   own service (with an `{ip}` placeholder) to self-host the lookup.
 
+## Blocking a noisy source
+
+A honeypot wants attackers, so blocking is about signal rather than
+defence: one scanner can push thousands of events a minute through the
+ring and evict everything interesting, and your own monitoring probes are
+noise. The dashboard has a **Blocked** tab, and every address in the live
+feed, the stats tables and a session header carries a one-click **block**
+button.
+
+Blocked traffic is dropped at accept time — the connection is closed
+before a session, an event or a reply exists, and UDP datagrams are
+discarded without a response. It costs one map lookup per connection, and
+nothing enters the event log, which is the point: blocking is how you stop
+a flood from consuming your retention window.
+
+- Single addresses (`1.2.3.4`) and ranges (`1.2.3.0/24`) both work. Pasting
+  `1.2.3.4:5678` from the feed is fine; the port is ignored.
+- Each entry records why it was added, by whom, how many connections it has
+  dropped and when it was last seen.
+- Blocking and unblocking are logged as `ip_blocked` / `ip_unblocked`
+  events, so the action shows in the feed and the history like anything
+  else.
+- The list lives in `data/blocklist.json` and survives restarts.
+
+Enforcement is inside the daemon because it runs unprivileged and cannot
+touch the host firewall. If you want the packets dropped by the kernel
+instead, the Blocked tab prints the matching `nft` commands to run on the
+host.
+
+API: `GET /v1/blocklist`, `POST /v1/blocklist` with `{"value","reason"}`,
+`DELETE /v1/blocklist?value=…`, or the `get_blocklist` / `block_ip` /
+`unblock_ip` WebSocket actions.
+
 ## Finding the box after its IP changes
 
 A honeypot on a dynamic IP breaks every dashboard bookmark when it is

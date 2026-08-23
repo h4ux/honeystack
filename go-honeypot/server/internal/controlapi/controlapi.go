@@ -27,6 +27,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/blocklist"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/geoip"
@@ -61,12 +62,13 @@ type BuildInfo struct {
 }
 
 type Server struct {
-	store   *eventlog.Store
-	manager *manager.Manager
-	sync    SyncFunc
-	geo     GeoLookup
-	pubaddr PublicAddr
-	build   BuildInfo
+	store     *eventlog.Store
+	manager   *manager.Manager
+	sync      SyncFunc
+	geo       GeoLookup
+	pubaddr   PublicAddr
+	blocklist Blocklist
+	build     BuildInfo
 
 	authKey string
 	http    *http.Server
@@ -86,6 +88,57 @@ func (s *Server) publicAddr() any {
 		return map[string]any{"enabled": false}
 	}
 	return s.pubaddr.Status()
+}
+
+// Blocklist is the subset of internal/blocklist the API needs.
+type Blocklist interface {
+	Entries() []blocklist.Entry
+	Add(value, reason, by string) (blocklist.Entry, error)
+	Remove(value string) bool
+	Len() int
+}
+
+// SetBlocklist exposes address blocking over the API.
+func (s *Server) SetBlocklist(b Blocklist) { s.blocklist = b }
+
+func (s *Server) blockEntries() any {
+	if s.blocklist == nil {
+		return map[string]any{"enabled": false, "entries": []any{}}
+	}
+	return map[string]any{"enabled": true, "entries": s.blocklist.Entries()}
+}
+
+// blockAdd blocks an address and records the action as an event, so the
+// change is visible in the feed and the history like anything else.
+func (s *Server) blockAdd(value, reason, by string) (any, error) {
+	if s.blocklist == nil {
+		return nil, errors.New("blocklist unavailable")
+	}
+	entry, err := s.blocklist.Add(value, reason, by)
+	if err != nil {
+		return nil, err
+	}
+	s.store.Log(eventlog.Event{
+		Service: "system", Type: "ip_blocked",
+		Command: "blocked " + entry.Value,
+		Details: map[string]any{"value": entry.Value, "reason": entry.Reason, "by": by},
+	})
+	return s.blockEntries(), nil
+}
+
+func (s *Server) blockRemove(value, by string) (any, error) {
+	if s.blocklist == nil {
+		return nil, errors.New("blocklist unavailable")
+	}
+	if !s.blocklist.Remove(value) {
+		return nil, fmt.Errorf("%s is not blocked", value)
+	}
+	s.store.Log(eventlog.Event{
+		Service: "system", Type: "ip_unblocked",
+		Command: "unblocked " + value,
+		Details: map[string]any{"value": value, "by": by},
+	})
+	return s.blockEntries(), nil
 }
 
 // GeoLookup is the subset of internal/geoip the API needs.
@@ -167,6 +220,7 @@ func (s *Server) Start(ctx context.Context, cfg config.Control, authKey string) 
 	mux.HandleFunc("/v1/geo", s.withAuth(s.restGeo))
 	mux.HandleFunc("/v1/version", s.withAuth(s.restVersion))
 	mux.HandleFunc("/v1/pubaddr", s.withAuth(s.restPubAddr))
+	mux.HandleFunc("/v1/blocklist", s.withAuth(s.restBlocklist))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("honeypot control-plane is up.\nWebSocket: ws://" + r.Host + "/api?token=<AUTH_KEY>\nREST: /v1/* with Authorization: Bearer <AUTH_KEY>\n"))
@@ -277,15 +331,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial payload: config, services, stats, recent events
 	if err := c.send(Message{Type: "hello", Payload: mustJSON(map[string]any{
-		"version":  "1",
-		"time":     time.Now().UnixMilli(),
-		"config":   config.Get(),
-		"services": s.manager.List(),
-		"stats":    s.store.Stats(),
-		"events":   s.store.Events(eventlog.EventFilter{Limit: 200}),
-		"build":    s.buildInfo(),
-		"geo":      s.geoStats(),
-		"pubaddr":  s.publicAddr(),
+		"version":   "1",
+		"time":      time.Now().UnixMilli(),
+		"config":    config.Get(),
+		"services":  s.manager.List(),
+		"stats":     s.store.Stats(),
+		"events":    s.store.Events(eventlog.EventFilter{Limit: 200}),
+		"build":     s.buildInfo(),
+		"geo":       s.geoStats(),
+		"pubaddr":   s.publicAddr(),
+		"blocklist": s.blockEntries(),
 	})}); err != nil {
 		return
 	}
@@ -393,6 +448,37 @@ func (s *Server) handleCommand(c *client, msg Message) {
 		reply(s.buildInfo())
 	case "get_pubaddr":
 		reply(s.publicAddr())
+	case "get_blocklist":
+		reply(s.blockEntries())
+	case "block_ip":
+		var req struct {
+			Value  string `json:"value"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(msg.Payload, &req); err != nil {
+			fail(err)
+			return
+		}
+		out, err := s.blockAdd(req.Value, req.Reason, "dashboard")
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply(out)
+	case "unblock_ip":
+		var req struct {
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal(msg.Payload, &req); err != nil {
+			fail(err)
+			return
+		}
+		out, err := s.blockRemove(req.Value, "dashboard")
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply(out)
 	case "ping":
 		reply(map[string]any{"pong": time.Now().UnixMilli()})
 	default:

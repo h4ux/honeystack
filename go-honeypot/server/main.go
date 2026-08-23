@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/blocklist"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/controlapi"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
@@ -103,6 +104,12 @@ func main() {
 		})
 	}
 
+	// Addresses whose traffic is dropped on arrival, enforced by every
+	// listener (see internal/blocklist).
+	blocked := blocklist.New(cfg.Storage.BlocklistFile)
+	defer blocked.Close()
+	honeypots.SetBlocklist(blocked)
+
 	mgr := manager.New(store)
 	registerHoneypots(mgr, cfg, store)
 	mgr.SetFallback(func(name string, c config.Service, s *eventlog.Store) (manager.Service, error) {
@@ -123,6 +130,7 @@ func main() {
 	api := controlapi.New(store, mgr, func(newCfg config.Config) { mgr.Sync(newCfg) })
 	api.SetGeo(geo)
 	api.SetPublicAddr(tracker)
+	api.SetBlocklist(blocked)
 	binPath, _ := os.Executable()
 	api.SetBuildInfo(controlapi.BuildInfo{
 		Version:   version,

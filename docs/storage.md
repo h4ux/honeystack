@@ -24,6 +24,7 @@ which is the install directory (`WorkingDirectory=` in the systemd unit).
     ├── geoip-cache.json             IP → country cache
     ├── dyndns.json                  0600, dynamic-DNS credentials
     ├── beacon.json                  0600, beacon topic + verify key
+    ├── blocklist.json               addresses whose traffic is dropped
     ├── ip-history.json              this host's public IP over time
     └── ssh_host_ed25519_key         0600, generated once, then stable
 
@@ -59,6 +60,7 @@ Which paths the daemon uses is configurable:
 | `data/ip-history.json` | `internal/pubaddr` | on every public-IP change | **temp + rename** (atomic) | 0644 |
 | `data/dyndns.json` | the installer (or you) | once, at install | **temp + rename** (atomic) | **0600** |
 | `data/beacon.json` | `internal/pubaddr` | generated on first start if absent | **temp + rename** (atomic) | **0600** |
+| `data/blocklist.json` | `internal/blocklist` | on every block/unblock, plus hit counters every 30 s | **temp + rename** (atomic) | 0644 |
 
 Three different patterns, chosen per file:
 

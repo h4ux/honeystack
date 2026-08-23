@@ -66,6 +66,7 @@ func (h *SSH) Start() error {
 	if err != nil {
 		return err
 	}
+	l = Guard(l)
 	h.listener = l
 
 	h.done = make(chan struct{})

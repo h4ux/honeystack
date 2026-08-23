@@ -31,7 +31,9 @@ type Storage struct {
 	// never rotates). StatsCacheMs serves the aggregate from cache instead
 	// of walking the ring per request (0 = 3000). StdoutEvents controls the
 	// journal: "important" (default), "all", or "none".
-	MaxSessions    int    `json:"maxSessions,omitempty"`
+	MaxSessions int `json:"maxSessions,omitempty"`
+	// BlocklistFile holds addresses whose traffic is dropped on arrival.
+	BlocklistFile  string `json:"blocklistFile,omitempty"`
 	MaxDetailBytes int    `json:"maxDetailBytes,omitempty"`
 	MaxLogFileMB   int    `json:"maxLogFileMb,omitempty"`
 	StatsCacheMs   int    `json:"statsCacheMs,omitempty"`
@@ -271,6 +273,9 @@ func merge(base, override Config) Config {
 	}
 	if override.Storage.MaxSessions != 0 {
 		out.Storage.MaxSessions = override.Storage.MaxSessions
+	}
+	if override.Storage.BlocklistFile != "" {
+		out.Storage.BlocklistFile = override.Storage.BlocklistFile
 	}
 	if override.Storage.MaxDetailBytes != 0 {
 		out.Storage.MaxDetailBytes = override.Storage.MaxDetailBytes

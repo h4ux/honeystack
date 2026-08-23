@@ -86,6 +86,7 @@ graph TD
 
 ```
 accept()                        honeypots/base.go   (TCP) or generic.go (UDP)
+  └─ blocklist check            blocked? close/ignore now — no session, no event
   └─ OpenSession()              eventlog: session row, capped table
   └─ handler(conn)              the protocol emulator, e.g. mail.go
        └─ store.Log(Event{…})   eventlog:

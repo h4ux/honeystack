@@ -15,7 +15,8 @@
     "maxDetailBytes": 2048,
     "maxLogFileMb": 128,
     "statsCacheMs": 3000,
-    "stdoutEvents": "important"
+    "stdoutEvents": "important",
+    "blocklistFile": "data/blocklist.json"
   },
   "geoip": {
     "enabled": true,

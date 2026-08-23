@@ -9,6 +9,19 @@ are no versioned releases yet: `main` is published continuously as the
 
 ### Security
 
+- `golang.org/x/crypto` bumped again, 0.52.0 → **0.55.0**, and
+  `golang.org/x/sys` 0.45.0 → 0.47.0.
+- GitHub Actions updated: `checkout` v4→v7, `setup-go` v5→v7,
+  `setup-node` v4→v7, `upload-artifact` v4→v7, `download-artifact` v4→v8.
+  This also clears the "Node.js 20 is deprecated" warnings CI was emitting.
+- Node edition: `express` 4→**5.2.1** and `better-sqlite3` 11→**12.11.1**,
+  with the declared engine raised to Node **>=20** (better-sqlite3 12 does
+  not support 18). Verified by running the Node honeypot end to end: every
+  dashboard endpoint, auth, static files, 404s, config PUT, and event
+  capture through SQLite. Dependabot's better-sqlite3 **13** PR is
+  deliberately not taken — it requires Node 22 and carries no security
+  advisory.
+
 - Bumped `golang.org/x/crypto` from 0.31.0 to 0.52.0, clearing all 16 open
   Dependabot alerts (7 critical, 3 high, 6 moderate) against the SSH
   stack. This raises the Go floor to **1.25** (CI builds on 1.26.7).
@@ -20,6 +33,18 @@ are no versioned releases yet: `main` is published continuously as the
   npm and GitHub Actions weekly, and CI runs `govulncheck` on every PR.
 
 ### Added
+
+- **Block an address from the dashboard.** Every address in the live feed,
+  the stats tables and the session header has a one-click **block** button,
+  and a new **Blocked** tab lists what is blocked with the reason, who added
+  it, how many connections it has dropped and when it was last seen — plus
+  an unblock button and a field for adding an address or CIDR by hand.
+  Blocked traffic is dropped at accept time by every listener (TCP and UDP)
+  before a session, an event or a reply exists, so a flooding scanner stops
+  consuming the retention window. The list persists in
+  `data/blocklist.json`; blocking is logged as an `ip_blocked` event; and
+  because the daemon is unprivileged, the tab also prints the equivalent
+  `nft` rules for dropping at the kernel instead.
 
 - **Beacon: the dashboard finds the host after its IP changes.** The
   daemon publishes a signed `{ip, controlPort, updatedAt}` document to a URL

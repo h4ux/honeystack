@@ -59,6 +59,8 @@
       <button class="tab" data-tab="services">Services</button>
       <button class="tab" data-tab="config">Config</button>
       <button class="tab" data-tab="stats">Stats</button>
+      <button class="tab" data-tab="blocked">Blocked</button>
+      <button class="tab" data-tab="blocked">Blocked</button>
     </nav>
     <div class="right">
       <span id="status-summary" class="muted"></span>
@@ -167,6 +169,50 @@
       </div>
       <textarea id="config-editor" spellcheck="false"></textarea>
       <div id="config-status" class="muted"></div>
+    </section>
+
+    <section id="tab-blocked" class="tab-panel">
+      <div class="toolbar">
+        <span class="muted">Traffic from these addresses is dropped on arrival — no session, no event, no reply.
+          Useful for a scanner flooding the ring, or your own probes.</span>
+      </div>
+      <form id="block-add" class="add-service">
+        <strong>Block an address</strong>
+        <label>IP or CIDR <input id="block-value" placeholder="1.2.3.4 or 1.2.3.0/24" required></label>
+        <label>Reason <input id="block-reason" placeholder="optional note"></label>
+        <button type="submit" class="primary">Block</button>
+        <span id="block-error" class="error"></span>
+      </form>
+      <div id="block-summary" class="muted"></div>
+      <div class="table-scroll">
+        <table id="block-table">
+          <thead><tr><th>Address</th><th>Reason</th><th>Blocked</th><th>By</th><th>Dropped</th><th>Last seen</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="block-firewall" class="firewall-hint"></div>
+    </section>
+
+    <section id="tab-blocked" class="tab-panel">
+      <div class="toolbar">
+        <span class="muted">Traffic from these addresses is dropped on arrival — no session, no event, no reply.
+          Useful for a scanner flooding the ring, or your own probes.</span>
+      </div>
+      <form id="block-add" class="add-service">
+        <strong>Block an address</strong>
+        <label>IP or CIDR <input id="block-value" placeholder="1.2.3.4 or 1.2.3.0/24" required></label>
+        <label>Reason <input id="block-reason" placeholder="optional note"></label>
+        <button type="submit" class="primary">Block</button>
+        <span id="block-error" class="error"></span>
+      </form>
+      <div id="block-summary" class="muted"></div>
+      <div class="table-scroll">
+        <table id="block-table">
+          <thead><tr><th>Address</th><th>Reason</th><th>Blocked</th><th>By</th><th>Dropped</th><th>Last seen</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="block-firewall" class="firewall-hint"></div>
     </section>
 
     <section id="tab-stats" class="tab-panel">

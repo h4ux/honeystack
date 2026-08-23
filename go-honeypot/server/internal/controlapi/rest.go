@@ -55,14 +55,15 @@ func subtleCompare(a, b string) bool {
 
 func (s *Server) restHello(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":  "1",
-		"config":   config.Get(),
-		"services": s.manager.List(),
-		"stats":    s.store.Stats(),
-		"events":   s.store.Events(eventlog.EventFilter{Limit: 200}),
-		"build":    s.buildInfo(),
-		"geo":      s.geoStats(),
-		"pubaddr":  s.publicAddr(),
+		"version":   "1",
+		"config":    config.Get(),
+		"services":  s.manager.List(),
+		"stats":     s.store.Stats(),
+		"events":    s.store.Events(eventlog.EventFilter{Limit: 200}),
+		"build":     s.buildInfo(),
+		"geo":       s.geoStats(),
+		"pubaddr":   s.publicAddr(),
+		"blocklist": s.blockEntries(),
 	})
 }
 
@@ -121,6 +122,42 @@ func (s *Server) restGeo(w http.ResponseWriter, r *http.Request) {
 		"locations": s.geoBatch(ips),
 		"geo":       s.geoStats(),
 	})
+}
+
+// restBlocklist: GET lists, POST adds {value, reason}, DELETE removes.
+func (s *Server) restBlocklist(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.blockEntries())
+	case http.MethodPost, http.MethodPut:
+		var req struct {
+			Value  string `json:"value"`
+			Reason string `json:"reason"`
+		}
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 8192))
+		if len(body) > 0 {
+			_ = json.Unmarshal(body, &req)
+		}
+		if req.Value == "" {
+			req.Value = r.URL.Query().Get("value")
+			req.Reason = r.URL.Query().Get("reason")
+		}
+		out, err := s.blockAdd(req.Value, req.Reason, "api")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodDelete:
+		out, err := s.blockRemove(r.URL.Query().Get("value"), "api")
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) restVersion(w http.ResponseWriter, r *http.Request) {

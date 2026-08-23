@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/h4ux/honeystack/go-honeypot/server/internal/blocklist"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/config"
 	"github.com/h4ux/honeystack/go-honeypot/server/internal/eventlog"
 )
@@ -66,7 +67,7 @@ func (t *TCP) Start() error {
 	if err != nil {
 		return err
 	}
-	t.listener = l
+	t.listener = Guard(l)
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 	t.wg.Add(1)
 	go t.accept()
@@ -152,4 +153,26 @@ func splitHostPort(addr string) (string, int) {
 	host = strings.TrimPrefix(host, "::ffff:")
 	p, _ := strconv.Atoi(port)
 	return host, p
+}
+
+// The blocklist is process-wide: there is one daemon per process and every
+// listener consults the same set, so a package-level handle keeps the 40+
+// emulator constructors free of plumbing they do not otherwise need.
+var blocked *blocklist.List
+
+// SetBlocklist installs the list every listener enforces.
+func SetBlocklist(l *blocklist.List) { blocked = l }
+
+// Guard wraps a listener so blocked sources are dropped at accept time.
+func Guard(l net.Listener) net.Listener {
+	if blocked == nil {
+		return l
+	}
+	return blocked.Guard(l)
+}
+
+// IsBlocked reports whether an address is blocked; used on the UDP path,
+// which has no listener to wrap.
+func IsBlocked(addr string) bool {
+	return blocked.Blocked(addr)
 }

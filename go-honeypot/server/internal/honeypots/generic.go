@@ -182,6 +182,11 @@ func (u *UDP) readLoop(ctx context.Context) {
 			return
 		}
 		remoteIP, remotePort := splitHostPort(addr.String())
+		// Dropped before a session, an event or a reply exists: a blocked
+		// scanner costs one map lookup per datagram and nothing else.
+		if IsBlocked(remoteIP) {
+			continue
+		}
 		cfg := u.Cfg()
 		meta := ConnMeta{RemoteIP: remoteIP, RemotePort: remotePort, LocalPort: cfg.Port}
 		// UDP has no connections: one session per datagram used to mean an

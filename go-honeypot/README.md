@@ -204,6 +204,80 @@ DNS ships **disabled** because `systemd-resolved` already owns port 53 on
 a typical Ubuntu box. Enable it after freeing the port (set
 `DNSStubListener=no` in `/etc/systemd/resolved.conf`).
 
+## What it stores, where, and for how long
+
+Nothing is stored in a database. There are four places data lives, and
+each one is bounded:
+
+| Where | What | Retention | Cost |
+|---|---|---|---|
+| **Memory ring** | the last `storage.maxLogRows` events (default **25,000**) | until pushed out by newer events | ~1–3.5 KB per event, so ~40–90 MB at the default |
+| **Session table** | one row per connection (or per 2-minute UDP burst): id, service, source, username, command count | oldest **closed** sessions are dropped past `storage.maxSessions` (default **20,000**) | ~260 bytes each, ~5 MB at the default |
+| **`data/events.ndjson`** | every event, one JSON object per line | rotated at `storage.maxLogFileMb` (default **128 MB**), keeping one previous generation as `events.ndjson.1` | ≤ ~256 MB on disk |
+| **`data/geoip-cache.json`** | country/ASN per IP | `geoip.ttlHours` (default 30 days) | ~150 bytes per IP |
+
+Per-event capture is capped too: `storage.maxDetailBytes` (default
+**2048**) is the ceiling for an event's whole `details` map, and HTTP
+bodies are read at most 16 KB before that cap applies. Without it a
+single scanner posting large bodies pins hundreds of MB in the ring.
+
+Events also stream to connected dashboards, and a filtered subset goes to
+stdout — see `storage.stdoutEvents` below.
+
+### Measured footprint
+
+A 20-second flood (≈54,000 events: ~900 connections/second across all 41
+listeners, 16k HTTP POSTs with 64 KB bodies, 2k UDP probes) on one core:
+
+| | Idle | During the flood | Settled after |
+|---|---|---|---|
+| RSS | 13 MB | 96 → 152 MB | 152 MB (84 MB live heap) |
+| CPU | 0.1% of a core (dashboard polling every 2s) | 11% of a core | 0.1% |
+| Ring | 0 | 25,000 events (capped) | 25,000 |
+| Sessions | 0 | 17,066 (capped at 20,000) | 17,066 |
+| Journal lines | — | 807 for 54,000 events | — |
+
+RSS sits above the live heap because Go returns memory to the OS lazily;
+`GOMEMLIMIT` (set to 192 MiB by the deploy script) keeps that bounded and
+makes the collector work harder instead of the kernel OOM-killing the
+daemon.
+
+### Tuning knobs
+
+```jsonc
+"storage": {
+  "logFile": "data/events.ndjson",
+  "maxLogRows": 25000,        // events in memory — the main RAM dial
+  "maxSessions": 20000,       // rows in the session table
+  "maxDetailBytes": 2048,     // per-event capture ceiling
+  "maxLogFileMb": 128,        // rotate the NDJSON past this (-1 = never)
+  "statsCacheMs": 3000,       // serve the aggregate from cache this long
+  "stdoutEvents": "important" // journal volume: important | all | none
+}
+```
+
+- **`maxLogRows`** is the dial that matters: heap ≈ `maxLogRows` × 1–3.5 KB
+  depending on how much of your traffic is HTTP with bodies.
+- **`statsCacheMs`** exists because computing the aggregate walks the whole
+  ring (~35 ms at 25k events) and every open dashboard asks on a timer.
+  Cached it is ~0.4 ms.
+- **`stdoutEvents`** defaults to `important` (credentials, commands,
+  relay/proxy attempts, amplification, errors). `all` writes a journal
+  line per event — on a scanned host that is a real CPU and disk cost.
+  `none` turns it off entirely.
+
+### Sizing profiles
+
+| Box | `maxLogRows` | `maxSessions` | `GOMEMLIMIT` | Expected RSS |
+|---|---|---|---|---|
+| 512 MB VPS | 10000 | 5000 | 96MiB | ~60–90 MB |
+| 1 GB VPS (default) | 25000 | 20000 | 192MiB | ~110–160 MB |
+| 4 GB+ | 100000 | 50000 | 768MiB | ~400–600 MB |
+
+Reducing `maxLogRows` does not lose history: the dashboard's History tab
+queries the ring, but `events.ndjson` keeps everything until rotation, and
+the ring is refilled from its tail on restart.
+
 ## Country lookups (GeoIP)
 
 Every event and session carries the source country when it is known:

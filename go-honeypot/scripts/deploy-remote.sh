@@ -32,6 +32,8 @@
 #       --dir PATH         install root (default: /opt/honeystack)
 #       --user NAME        system account that runs the daemon
 #                          (default: honeypot)
+#       --memory MB        daemon memory budget (default 192; sets
+#                          GOMEMLIMIT, MemoryHigh and MemoryMax)
 #       --skip-binary      do not touch /usr/local/bin/honeypot
 #       --skip-ssh         leave the real sshd where it is
 #       --skip-service     do not install/start the systemd unit
@@ -53,6 +55,10 @@ SSH_PORT="${REAL_SSH_PORT:-1980}"
 CONTROL_PORT="${CONTROL_PORT:-9090}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/honeystack}"
 SVC_USER="${SVC_USER:-honeypot}"
+# Memory ceilings for the service unit (MiB). Sized for a 1 GB VPS.
+MEM_LIMIT_MB="${MEM_LIMIT_MB:-192}"
+MEM_HIGH_MB="${MEM_HIGH_MB:-256}"
+MEM_MAX_MB="${MEM_MAX_MB:-384}"
 SERVICE_NAME="honeypot-go"
 BIN_PATH="/usr/local/bin/honeypot"
 ASSUME_YES=0
@@ -88,6 +94,7 @@ while [[ $# -gt 0 ]]; do
     --control-port)  CONTROL_PORT="${2:?}"; shift 2 ;;
     --dir)           INSTALL_DIR="${2:?}"; shift 2 ;;
     --user)          SVC_USER="${2:?}"; shift 2 ;;
+    --memory)        MEM_LIMIT_MB="${2:?}"; MEM_HIGH_MB=$(( ${2} * 4 / 3 )); MEM_MAX_MB=$(( ${2} * 2 )); shift 2 ;;
     --skip-binary)   DO_BINARY=0; shift ;;
     --skip-ssh)      DO_SSH=0; shift ;;
     --skip-service)  DO_SERVICE=0; shift ;;
@@ -177,6 +184,7 @@ ${C_B}┌───────────────────────�
   target binary : ${ASSET}   ${C_D}(from ${REPO} @ ${TAG})${C_0}
   install root  : ${INSTALL_DIR}
   service       : ${SERVICE_NAME}.service   (user: ${SVC_USER})
+  memory budget : ${MEM_LIMIT_MB} MiB soft / ${MEM_HIGH_MB} MiB high / ${MEM_MAX_MB} MiB max
   real sshd     : ${CURRENT_SSH_PORTS:-22 (default)}  ->  ${SSH_PORT}
   control API   : 0.0.0.0:${CONTROL_PORT}  (dashboard connects here)
 
@@ -447,6 +455,13 @@ ExecStart=${BIN_PATH} --defaults ${INSTALL_DIR}/config.default.json --config ${I
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=65535
+# A soft limit makes Go collect harder instead of the kernel OOM-killing the
+# daemon; MemoryHigh throttles it before MemoryMax would kill it. Raise both
+# (and storage.maxLogRows) on a box with memory to spare.
+Environment=GOMEMLIMIT=${MEM_LIMIT_MB}MiB
+MemoryHigh=${MEM_HIGH_MB}M
+MemoryMax=${MEM_MAX_MB}M
+CPUWeight=50
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true

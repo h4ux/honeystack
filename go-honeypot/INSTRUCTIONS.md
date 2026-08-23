@@ -163,6 +163,78 @@ placeholder). Private and loopback addresses are never sent anywhere.
 Lookups are rate-limited (`rateLimitPerMin`, default 40) and never block a
 honeypot handler.
 
+## 2e. If the daemon is eating the box
+
+First, see what it actually costs: the dashboard's build chip (top right)
+now reports live heap, reserved memory, goroutines and the retention caps.
+From the server:
+
+```bash
+systemctl status honeypot-go | grep -E "Memory|CPU"
+sudo journalctl -u honeypot-go --disk-usage
+du -sh /opt/honeystack/data/*
+```
+
+Then turn the dials in `/opt/honeystack/config.json` — no rebuild needed,
+just a restart:
+
+```bash
+sudo python3 - <<'EOF'
+import json
+p = "/opt/honeystack/config.json"
+cfg = json.load(open(p))
+st = cfg.setdefault("storage", {})
+st["maxLogRows"] = 10000        # events held in memory (the main RAM dial)
+st["maxSessions"] = 5000        # session table rows
+st["maxDetailBytes"] = 1024     # per-event capture ceiling
+st["maxLogFileMb"] = 64         # rotate the NDJSON sooner
+st["stdoutEvents"] = "none"     # stop writing a journal line per event
+json.dump(cfg, open(p, "w"), indent=2)
+EOF
+sudo systemctl restart honeypot-go
+```
+
+Give the process a hard ceiling as well (the deploy script does this for
+new installs; existing units need a drop-in):
+
+```bash
+sudo systemctl edit honeypot-go
+# then add:
+[Service]
+Environment=GOMEMLIMIT=96MiB
+MemoryHigh=128M
+MemoryMax=192M
+CPUWeight=50
+```
+
+`GOMEMLIMIT` makes Go collect harder as it approaches the limit;
+`MemoryHigh` throttles the cgroup before `MemoryMax` would kill it.
+
+Other things that help on a small box:
+
+- **Turn off listeners you do not care about.** The UDP reflection targets
+  (`snmp`, `ntp`, `dns`, `tftp`, `ipsec-ike`, `wireguard`, `l2tp`) attract
+  the highest packet rates for the least interesting data. Disable them in
+  the Services tab or the config.
+- **Cap the journal** if it has already grown:
+  `sudo journalctl --vacuum-size=100M`, and set
+  `SystemMaxUse=200M` in `/etc/systemd/journald.conf`.
+- **Reclaim disk now:** `events.ndjson` rotates at the configured size,
+  but an old install may have a huge one. Keep the tail and drop the rest:
+  ```bash
+  sudo systemctl stop honeypot-go
+  sudo tail -c 100000000 /opt/honeystack/data/events.ndjson > /tmp/e.ndjson
+  sudo mv /tmp/e.ndjson /opt/honeystack/data/events.ndjson
+  sudo chown honeypot:honeypot /opt/honeystack/data/events.ndjson
+  sudo systemctl start honeypot-go
+  ```
+- **Disable GeoIP** (`geoip.enabled: false`) if you do not need countries;
+  it is rate-limited but it does keep a cache in memory.
+
+What each setting costs is documented in
+[README.md](./README.md#what-it-stores-where-and-for-how-long), including
+sizing profiles for 512 MB / 1 GB / 4 GB hosts.
+
 ## 3. Reconnect on the new SSH port
 
 ```bash

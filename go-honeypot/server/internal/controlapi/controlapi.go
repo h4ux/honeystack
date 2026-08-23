@@ -13,10 +13,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +47,16 @@ type BuildInfo struct {
 	Repo      string `json:"repo,omitempty"`
 	Binary    string `json:"binary,omitempty"`
 	Services  int    `json:"services"`
+
+	// Runtime footprint, so an operator can see what the daemon costs
+	// without shelling into the box.
+	HeapMB      float64 `json:"heapMb"`
+	SysMB       float64 `json:"sysMb"`
+	Goroutines  int     `json:"goroutines"`
+	NumCPU      int     `json:"numCpu"`
+	MemLimitMB  float64 `json:"memLimitMb,omitempty"`
+	MaxLogRows  int     `json:"maxLogRows,omitempty"`
+	MaxSessions int     `json:"maxSessions,omitempty"`
 }
 
 type Server struct {
@@ -73,6 +86,20 @@ func (s *Server) SetBuildInfo(info BuildInfo) { s.build = info }
 func (s *Server) buildInfo() BuildInfo {
 	info := s.build
 	info.Services = len(s.manager.List())
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	info.HeapMB = float64(m.HeapAlloc) / 1024 / 1024
+	info.SysMB = float64(m.Sys) / 1024 / 1024
+	info.Goroutines = runtime.NumGoroutine()
+	info.NumCPU = runtime.NumCPU()
+	// GOMEMLIMIT, when the operator set one.
+	if limit := debug.SetMemoryLimit(-1); limit > 0 && limit != math.MaxInt64 {
+		info.MemLimitMB = float64(limit) / 1024 / 1024
+	}
+	cfg := config.Get()
+	info.MaxLogRows = cfg.Storage.MaxLogRows
+	info.MaxSessions = cfg.Storage.MaxSessions
 	return info
 }
 

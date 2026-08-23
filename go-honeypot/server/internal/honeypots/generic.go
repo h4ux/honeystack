@@ -89,14 +89,21 @@ type UDPReply struct {
 // UDPHandler turns one inbound datagram into a logged event and a reply.
 type UDPHandler func(payload []byte, meta ConnMeta) UDPReply
 
+type udpSession struct {
+	id   string
+	seen time.Time
+}
+
 type UDP struct {
-	name    string
-	mu      sync.RWMutex
-	cfg     config.Service
-	store   *eventlog.Store
-	conn    *net.UDPConn
-	cancel  context.CancelFunc
-	handler UDPHandler
+	name        string
+	mu          sync.RWMutex
+	sessMu      sync.Mutex
+	udpSessions map[string]*udpSession
+	cfg         config.Service
+	store       *eventlog.Store
+	conn        *net.UDPConn
+	cancel      context.CancelFunc
+	handler     UDPHandler
 }
 
 func NewUDP(name string, cfg config.Service, store *eventlog.Store) *UDP {
@@ -145,6 +152,12 @@ func (u *UDP) Stop() error {
 	if u.cancel != nil {
 		u.cancel()
 	}
+	u.sessMu.Lock()
+	for k, v := range u.udpSessions {
+		u.store.CloseSession(v.id)
+		delete(u.udpSessions, k)
+	}
+	u.sessMu.Unlock()
 	if u.conn != nil {
 		return u.conn.Close()
 	}
@@ -169,12 +182,12 @@ func (u *UDP) readLoop(ctx context.Context) {
 			return
 		}
 		remoteIP, remotePort := splitHostPort(addr.String())
-		sessionID := eventlog.RandID(8)
 		cfg := u.Cfg()
 		meta := ConnMeta{RemoteIP: remoteIP, RemotePort: remotePort, LocalPort: cfg.Port}
-		u.store.OpenSession(eventlog.Session{
-			ID: sessionID, Service: u.name, RemoteIP: remoteIP, RemotePort: remotePort,
-		})
+		// UDP has no connections: one session per datagram used to mean an
+		// SNMP/NTP sweep created millions of session rows. Group a source
+		// into one session for a short window instead.
+		sessionID := u.sessionFor(remoteIP, remotePort)
 
 		if u.handler != nil {
 			// Copy the payload: buf is reused on the next read.
@@ -195,7 +208,6 @@ func (u *UDP) readLoop(ctx context.Context) {
 			if len(reply.Response) > 0 {
 				_, _ = u.conn.WriteToUDP(reply.Response, addr)
 			}
-			u.store.CloseSession(sessionID)
 			continue
 		}
 
@@ -212,8 +224,58 @@ func (u *UDP) readLoop(ctx context.Context) {
 		if cfg.Banner != "" {
 			_, _ = u.conn.WriteToUDP([]byte(cfg.Banner), addr)
 		}
-		u.store.CloseSession(sessionID)
 	}
+}
+
+// udpSessionWindow groups datagrams from the same source into one session.
+const udpSessionWindow = 2 * time.Minute
+
+// sessionFor returns the session id for this source, opening one if the
+// window has expired. Expired entries are closed and dropped, so the table
+// tracks active scanners rather than every packet ever seen.
+func (u *UDP) sessionFor(ip string, port int) string {
+	key := ip + ":" + strconv.Itoa(port)
+	now := time.Now()
+	u.sessMu.Lock()
+	defer u.sessMu.Unlock()
+	if u.udpSessions == nil {
+		u.udpSessions = map[string]*udpSession{}
+	}
+	if existing, ok := u.udpSessions[key]; ok && now.Sub(existing.seen) < udpSessionWindow {
+		existing.seen = now
+		return existing.id
+	}
+	if existing, ok := u.udpSessions[key]; ok {
+		u.store.CloseSession(existing.id)
+		delete(u.udpSessions, key)
+	}
+	id := eventlog.RandID(8)
+	u.store.OpenSession(eventlog.Session{
+		ID: id, Service: u.name, RemoteIP: ip, RemotePort: port,
+	})
+	u.udpSessions[key] = &udpSession{id: id, seen: now}
+
+	// Close out anything idle, and hard-cap the map so a spoofed-source
+	// flood cannot grow it without bound.
+	for k, v := range u.udpSessions {
+		if now.Sub(v.seen) >= udpSessionWindow {
+			u.store.CloseSession(v.id)
+			delete(u.udpSessions, k)
+		}
+	}
+	if len(u.udpSessions) > 4096 {
+		oldestKey, oldest := "", now
+		for k, v := range u.udpSessions {
+			if !v.seen.After(oldest) {
+				oldestKey, oldest = k, v.seen
+			}
+		}
+		if oldestKey != "" {
+			u.store.CloseSession(u.udpSessions[oldestKey].id)
+			delete(u.udpSessions, oldestKey)
+		}
+	}
+	return id
 }
 
 // callHandler isolates a protocol emulator's panic to one datagram.

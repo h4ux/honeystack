@@ -67,7 +67,9 @@ func (h *HTTP) handle(w http.ResponseWriter, r *http.Request) {
 	remoteIP, remotePort := splitHostPort(r.RemoteAddr)
 	sessionID := eventlog.RandID(6)
 
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+	// 16 KB is plenty to identify a webshell drop or an exploit body,
+	// and it is what ends up pinned in the in-memory ring.
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 16*1024))
 	defer r.Body.Close()
 
 	loginPath := cfg.LoginPagePath

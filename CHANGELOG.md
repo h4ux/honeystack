@@ -19,7 +19,41 @@ are no versioned releases yet: `main` is published continuously as the
 - `.github/dependabot.yml` now watches Go modules (with the vendor tree),
   npm and GitHub Actions weekly, and CI runs `govulncheck` on every PR.
 
+### Fixed
+
+- **Unbounded memory growth.** Nothing ever removed rows from the session
+  table, and UDP opened a session *per datagram* — an SNMP/NTP sweep grew
+  it forever (measured: 252 MB per million sessions). Sessions are now
+  capped (`storage.maxSessions`, default 20,000, oldest closed dropped
+  first) and UDP groups a source into one session per 2-minute window.
+- **Event ring memory.** A full ring of HTTP events with headers and
+  bodies measured 380 MB. Captured `details` are now capped per event
+  (`storage.maxDetailBytes`, default 2048), HTTP body capture dropped from
+  256 KB/64 KB to 16 KB, and the default `maxLogRows` from 200,000 to
+  25,000. A 54,000-event flood now settles at 84 MB live heap.
+- **CPU spent recomputing stats.** `Stats()` walks the whole ring (193 ms
+  at 200k events) and every dashboard asked for it every 2 seconds. It is
+  now served from a short cache (`storage.statsCacheMs`, default 3s):
+  0.4 ms per request, 0.1% of a core at idle instead of ~10%.
+- **`events.ndjson` grew without limit** and was read in full at boot. It
+  now rotates at `storage.maxLogFileMb` (default 128 MB, one generation
+  kept), and startup replays only the tail it can actually hold.
+- **Every event was mirrored to the journal.** `storage.stdoutEvents`
+  defaults to `important` (credentials, commands, relay/proxy attempts,
+  amplification, errors): 807 journal lines for 54,000 events instead of
+  54,000.
+- `Store.Close()` panicked if called twice.
+
 ### Added
+
+- The `/v1/version` payload (and the dashboard's build panel) now report
+  live heap, reserved memory, goroutines, CPU count, `GOMEMLIMIT` and the
+  retention caps, so an operator can see the daemon's footprint without
+  shelling into the box.
+- `deploy-remote.sh` writes `GOMEMLIMIT`, `MemoryHigh`, `MemoryMax` and
+  `CPUWeight` into the systemd unit (`--memory MB` to change the budget,
+  default 192 MiB).
+
 
 - **24 new honeypot services** (41 listeners total):
   - Mail: SMTP (25), SMTP submission (587), IMAP (143), POP3 (110) —

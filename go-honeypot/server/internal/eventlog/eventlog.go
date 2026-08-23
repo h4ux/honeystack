@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -204,6 +205,15 @@ type Store struct {
 	trafficSinceStart int
 	svcFirstSince     map[string]int64
 	svcEventsSince    map[string]int
+
+	opts      Options
+	logPath   string
+	fileBytes int64
+	closeOnce sync.Once
+
+	statsMu    sync.Mutex
+	statsCache Stats
+	statsAt    time.Time
 }
 
 // SetGeo attaches (or clears) the country resolver.
@@ -248,10 +258,50 @@ func (s *Store) annotateSession(sess *Session) {
 	}
 }
 
-func New(logPath string, maxRows int) (*Store, error) {
-	if maxRows <= 0 {
-		maxRows = 200000
+// Options bound what the store keeps. Every field has a sane default, so
+// Options{} is valid.
+type Options struct {
+	MaxRows        int // events held in memory
+	MaxSessions    int // rows in the session table
+	MaxDetailBytes int // per detail value; the whole map gets 4x this
+	MaxLogFileMB   int // rotate events.ndjson past this; -1 disables
+	StatsCacheMs   int // serve the aggregate from cache for this long
+}
+
+const (
+	defaultMaxRows        = 25000
+	defaultMaxSessions    = 20000
+	defaultMaxDetailBytes = 2048
+	defaultMaxLogFileMB   = 128
+	defaultStatsCacheMs   = 3000
+)
+
+func (o Options) withDefaults() Options {
+	if o.MaxRows <= 0 {
+		o.MaxRows = defaultMaxRows
 	}
+	if o.MaxSessions <= 0 {
+		o.MaxSessions = defaultMaxSessions
+	}
+	if o.MaxDetailBytes <= 0 {
+		o.MaxDetailBytes = defaultMaxDetailBytes
+	}
+	if o.MaxLogFileMB == 0 {
+		o.MaxLogFileMB = defaultMaxLogFileMB
+	}
+	if o.StatsCacheMs <= 0 {
+		o.StatsCacheMs = defaultStatsCacheMs
+	}
+	return o
+}
+
+// New opens the store with default limits. Use NewWithOptions to change them.
+func New(logPath string, maxRows int) (*Store, error) {
+	return NewWithOptions(logPath, Options{MaxRows: maxRows})
+}
+
+func NewWithOptions(logPath string, opts Options) (*Store, error) {
+	opts = opts.withDefaults()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return nil, err
 	}
@@ -260,7 +310,9 @@ func New(logPath string, maxRows int) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{
-		max:            maxRows,
+		max:            opts.MaxRows,
+		opts:           opts,
+		logPath:        logPath,
 		sessions:       map[string]*Session{},
 		file:           f,
 		writer:         bufio.NewWriter(f),
@@ -271,9 +323,12 @@ func New(logPath string, maxRows int) (*Store, error) {
 		svcFirstSince:  map[string]int64{},
 		svcEventsSince: map[string]int{},
 	}
+	if fi, err := f.Stat(); err == nil {
+		s.fileBytes = fi.Size()
+	}
 	// Rehydrate from the NDJSON log so a dashboard that connects after a
 	// restart still sees history, not just events since the daemon booted.
-	if err := s.loadFromDisk(logPath, maxRows); err != nil {
+	if err := s.loadFromDisk(logPath, opts.MaxRows); err != nil {
 		log.Printf("[eventlog] could not replay %s: %v", logPath, err)
 	}
 	go s.flusher()
@@ -291,8 +346,33 @@ func (s *Store) loadFromDisk(logPath string, maxRows int) error {
 	}
 	defer f.Close()
 
+	// Only the tail can survive the ring anyway, so seek instead of reading
+	// (and allocating) a log that may be gigabytes after weeks of scanning.
+	// 4 KB per event is a generous ceiling for the rows we keep.
+	if fi, err := f.Stat(); err == nil {
+		budget := int64(maxRows) * 4096
+		if cap := int64(s.opts.MaxLogFileMB) * 1024 * 1024; cap > 0 && cap < budget {
+			budget = cap
+		}
+		if budget > 0 && fi.Size() > budget {
+			if _, err := f.Seek(fi.Size()-budget, io.SeekStart); err == nil {
+				// The first line after an arbitrary offset is a fragment.
+				br := bufio.NewReader(f)
+				if _, err := br.ReadString('\n'); err == nil {
+					log.Printf("[eventlog] replaying the last %d MB of %s (file is %d MB)",
+						budget/1024/1024, logPath, fi.Size()/1024/1024)
+					return s.replay(br, maxRows)
+				}
+			}
+		}
+	}
+
+	return s.replay(f, maxRows)
+}
+
+func (s *Store) replay(r io.Reader, maxRows int) error {
 	ring := make([]Event, 0, 4096)
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -348,7 +428,7 @@ func (s *Store) loadFromDisk(logPath string, maxRows int) error {
 		}
 	}
 	if n := len(ring); n > 0 {
-		log.Printf("[eventlog] replayed %d events from %s", n, logPath)
+		log.Printf("[eventlog] replayed %d events from %s", n, s.logPath)
 	}
 	return nil
 }
@@ -377,14 +457,68 @@ func (s *Store) flusher() {
 	}
 }
 
+// Close stops the flusher and drains the write buffer. Safe to call more
+// than once: a second call used to panic on the closed channel.
 func (s *Store) Close() {
-	close(s.closeCh)
+	s.closeOnce.Do(func() { close(s.closeCh) })
 }
 
 // Log appends an event, notifies subscribers, and returns the stored copy.
+// capDetails keeps one captured request from pinning kilobytes in the ring
+// for the rest of the process's life. Values are truncated, not dropped:
+// the marker makes it obvious in the dashboard that there was more.
+func capDetails(details map[string]any, maxValue int) map[string]any {
+	if len(details) == 0 || maxValue <= 0 {
+		return details
+	}
+	// maxDetailBytes is the ceiling for the whole map, not per value: under
+	// an all-HTTP flood every event carries headers *and* a body, and a
+	// per-value cap alone still let 25k events hold ~200 MB.
+	budget := maxValue
+	if maxValue > 256 {
+		maxValue /= 2
+	}
+	out := make(map[string]any, len(details))
+	spent := 0
+	for k, v := range details {
+		switch val := v.(type) {
+		case string:
+			if len(val) > maxValue {
+				val = val[:maxValue] + "…[truncated]"
+			}
+			if spent+len(val) > budget {
+				out[k] = "…[dropped: details budget]"
+				continue
+			}
+			spent += len(val)
+			out[k] = val
+		case map[string]string:
+			trimmed := make(map[string]string, len(val))
+			for hk, hv := range val {
+				if len(hv) > maxValue {
+					hv = hv[:maxValue] + "…"
+				}
+				if spent+len(hv) > budget {
+					continue
+				}
+				spent += len(hv)
+				trimmed[hk] = hv
+			}
+			out[k] = trimmed
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
 func (s *Store) Log(e Event) Event {
 	if e.TS == 0 {
 		e.TS = time.Now().UnixMilli()
+	}
+	e.Details = capDetails(e.Details, s.opts.MaxDetailBytes)
+	if max := s.opts.MaxDetailBytes * 8; max > 0 && len(e.Command) > max {
+		e.Command = e.Command[:max] + "…[truncated]"
 	}
 	if e.RemoteIP != "" {
 		if g := s.geoResolver(); g != nil {
@@ -423,8 +557,12 @@ func (s *Store) Log(e Event) Event {
 		}
 	}
 	b, _ := json.Marshal(e)
-	_, _ = s.writer.Write(b)
-	_, _ = s.writer.Write([]byte("\n"))
+	n, _ := s.writer.Write(b)
+	n2, _ := s.writer.Write([]byte("\n"))
+	s.fileBytes += int64(n + n2)
+	if s.opts.MaxLogFileMB > 0 && s.fileBytes > int64(s.opts.MaxLogFileMB)*1024*1024 {
+		s.rotateLocked()
+	}
 	s.mu.Unlock()
 	s.fanout(e)
 	return e
@@ -436,7 +574,73 @@ func (s *Store) OpenSession(sess Session) {
 	}
 	s.mu.Lock()
 	s.sessions[sess.ID] = &sess
+	if len(s.sessions) > s.opts.MaxSessions {
+		s.pruneSessionsLocked()
+	}
 	s.mu.Unlock()
+}
+
+// pruneSessionsLocked drops the oldest closed sessions until the table is
+// back under 80% of the cap. Nothing used to remove sessions at all, so a
+// scanned host grew this map until the process was killed.
+func (s *Store) pruneSessionsLocked() {
+	target := s.opts.MaxSessions * 8 / 10
+	if target < 1 {
+		target = 1
+	}
+	type ref struct {
+		id string
+		ts int64
+	}
+	closed := make([]ref, 0, len(s.sessions))
+	for id, sess := range s.sessions {
+		if sess.ClosedAt != 0 {
+			closed = append(closed, ref{id: id, ts: sess.OpenedAt})
+		}
+	}
+	sort.Slice(closed, func(i, j int) bool { return closed[i].ts < closed[j].ts })
+	for _, c := range closed {
+		if len(s.sessions) <= target {
+			break
+		}
+		delete(s.sessions, c.id)
+	}
+	// Still over the cap? Every session claims to be open — drop the oldest
+	// of those too rather than grow without bound.
+	if len(s.sessions) > s.opts.MaxSessions {
+		open := make([]ref, 0, len(s.sessions))
+		for id, sess := range s.sessions {
+			open = append(open, ref{id: id, ts: sess.OpenedAt})
+		}
+		sort.Slice(open, func(i, j int) bool { return open[i].ts < open[j].ts })
+		for _, c := range open {
+			if len(s.sessions) <= target {
+				break
+			}
+			delete(s.sessions, c.id)
+		}
+	}
+}
+
+// rotateLocked moves the NDJSON log aside once it passes the size cap,
+// keeping exactly one previous generation. Caller holds s.mu.
+func (s *Store) rotateLocked() {
+	_ = s.writer.Flush()
+	_ = s.file.Close()
+	prev := s.logPath + ".1"
+	_ = os.Remove(prev)
+	if err := os.Rename(s.logPath, prev); err != nil {
+		log.Printf("[eventlog] rotate failed: %v", err)
+	}
+	f, err := os.OpenFile(s.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("[eventlog] reopen after rotate failed: %v", err)
+		return
+	}
+	s.file = f
+	s.writer = bufio.NewWriter(f)
+	s.fileBytes = 0
+	log.Printf("[eventlog] rotated %s (kept one generation as %s)", s.logPath, prev)
 }
 
 func (s *Store) CloseSession(id string) {
@@ -712,7 +916,25 @@ func (s *Store) StartedAt() int64 {
 	return s.startedAt
 }
 
+// Stats serves the aggregate from a short-lived cache: computing it walks
+// the whole ring, and every connected dashboard asks for it on a timer.
 func (s *Store) Stats() Stats {
+	ttl := time.Duration(s.opts.StatsCacheMs) * time.Millisecond
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if !s.statsAt.IsZero() && time.Since(s.statsAt) < ttl {
+		cached := s.statsCache
+		// Uptime is the one field that must not look frozen.
+		cached.UptimeMs = time.Now().UnixMilli() - cached.StartedAt
+		return cached
+	}
+	st := s.computeStats()
+	s.statsCache = st
+	s.statsAt = time.Now()
+	return st
+}
+
+func (s *Store) computeStats() Stats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

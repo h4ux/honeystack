@@ -9,8 +9,13 @@
   },
   "storage": {
     "logFile": "data/events.ndjson",
-    "maxLogRows": 200000,
-    "hostKeyFile": "data/ssh_host_ed25519_key"
+    "maxLogRows": 25000,
+    "hostKeyFile": "data/ssh_host_ed25519_key",
+    "maxSessions": 20000,
+    "maxDetailBytes": 2048,
+    "maxLogFileMb": 128,
+    "statsCacheMs": 3000,
+    "stdoutEvents": "important"
   },
   "geoip": {
     "enabled": true,

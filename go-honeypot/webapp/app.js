@@ -901,6 +901,14 @@
       ['Go / platform', [build.goVersion, build.os && build.arch ? build.os + '/' + build.arch : ''].filter(Boolean).join(' · ') || '—'],
       ['Binary', build.binary || '—'],
       ['Listeners', build.services != null ? String(build.services) : '—'],
+      ['Memory', build.heapMb != null
+        ? `${build.heapMb.toFixed(1)} MB heap · ${(build.sysMb || 0).toFixed(0)} MB reserved` +
+          (build.memLimitMb ? ` · limit ${build.memLimitMb.toFixed(0)} MB` : '')
+        : '—'],
+      ['Goroutines / CPUs', build.goroutines ? `${build.goroutines} / ${build.numCpu || '?'}` : '—'],
+      ['Retention', build.maxLogRows
+        ? `${num(build.maxLogRows)} events in memory · ${num(build.maxSessions || 0)} sessions`
+        : '—'],
       ['Started', build.startedAt ? `${new Date(build.startedAt).toLocaleString()} (up ${uptime(build.startedAt)})` : '—'],
       ['Repository', repoName()],
       ['Latest release', rel.name ? `${rel.name}${rel.publishedAt ? ' · ' + new Date(rel.publishedAt).toLocaleString() : ''}` : (rel.error ? 'unavailable' : '—')],

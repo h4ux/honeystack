@@ -21,6 +21,21 @@ type Storage struct {
 	LogFile     string `json:"logFile"`
 	MaxLogRows  int    `json:"maxLogRows"`
 	HostKeyFile string `json:"hostKeyFile"`
+
+	// Resource limits. A public honeypot is scanned continuously, so every
+	// one of these is a memory or disk ceiling, not a nicety.
+	//
+	// MaxSessions caps the session table (0 = 20000). MaxDetailBytes caps
+	// each captured detail value and the whole details map per event
+	// (0 = 2048/8192). MaxLogFileMB rotates events.ndjson (0 = 128, -1
+	// never rotates). StatsCacheMs serves the aggregate from cache instead
+	// of walking the ring per request (0 = 3000). StdoutEvents controls the
+	// journal: "important" (default), "all", or "none".
+	MaxSessions    int    `json:"maxSessions,omitempty"`
+	MaxDetailBytes int    `json:"maxDetailBytes,omitempty"`
+	MaxLogFileMB   int    `json:"maxLogFileMb,omitempty"`
+	StatsCacheMs   int    `json:"statsCacheMs,omitempty"`
+	StdoutEvents   string `json:"stdoutEvents,omitempty"`
 }
 
 // GeoIP controls country lookups for attacker IPs. Lookups go to a public
@@ -174,6 +189,21 @@ func merge(base, override Config) Config {
 	}
 	if override.Storage.HostKeyFile != "" {
 		out.Storage.HostKeyFile = override.Storage.HostKeyFile
+	}
+	if override.Storage.MaxSessions != 0 {
+		out.Storage.MaxSessions = override.Storage.MaxSessions
+	}
+	if override.Storage.MaxDetailBytes != 0 {
+		out.Storage.MaxDetailBytes = override.Storage.MaxDetailBytes
+	}
+	if override.Storage.MaxLogFileMB != 0 {
+		out.Storage.MaxLogFileMB = override.Storage.MaxLogFileMB
+	}
+	if override.Storage.StatsCacheMs != 0 {
+		out.Storage.StatsCacheMs = override.Storage.StatsCacheMs
+	}
+	if override.Storage.StdoutEvents != "" {
+		out.Storage.StdoutEvents = override.Storage.StdoutEvents
 	}
 	if override.GeoIP != nil {
 		out.GeoIP = override.GeoIP

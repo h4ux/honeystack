@@ -59,7 +59,13 @@ func main() {
 		log.Fatalf("config init: %v", err)
 	}
 
-	store, err := eventlog.New(cfg.Storage.LogFile, cfg.Storage.MaxLogRows)
+	store, err := eventlog.NewWithOptions(cfg.Storage.LogFile, eventlog.Options{
+		MaxRows:        cfg.Storage.MaxLogRows,
+		MaxSessions:    cfg.Storage.MaxSessions,
+		MaxDetailBytes: cfg.Storage.MaxDetailBytes,
+		MaxLogFileMB:   cfg.Storage.MaxLogFileMB,
+		StatsCacheMs:   cfg.Storage.StatsCacheMs,
+	})
 	if err != nil {
 		log.Fatalf("eventlog init: %v", err)
 	}
@@ -71,10 +77,23 @@ func main() {
 	defer geo.Close()
 	store.SetGeo(geo)
 
-	// Mirror every event to stdout for operators.
-	store.Subscribe(func(e eventlog.Event) {
-		fmt.Println(formatEvent(e))
-	})
+	// Mirror events to stdout for operators. On a scanned host this goes to
+	// the systemd journal, so "all" is a real CPU and disk cost — the
+	// default keeps the lines that matter and drops connection noise.
+	switch strings.ToLower(cfg.Storage.StdoutEvents) {
+	case "none", "off", "false":
+		log.Printf("[system] event mirroring to stdout is off (storage.stdoutEvents)")
+	case "all":
+		store.Subscribe(func(e eventlog.Event) {
+			fmt.Println(formatEvent(e))
+		})
+	default: // "important"
+		store.Subscribe(func(e eventlog.Event) {
+			if interestingEvent(e) {
+				fmt.Println(formatEvent(e))
+			}
+		})
+	}
 
 	mgr := manager.New(store)
 	registerHoneypots(mgr, cfg, store)
@@ -262,6 +281,20 @@ func registerHoneypots(m *manager.Manager, cfg config.Config, store *eventlog.St
 	m.Register("sip-tcp", func(c config.Service, s *eventlog.Store) (manager.Service, error) {
 		return honeypots.NewSIPTCP(c, s), nil
 	})
+}
+
+// interestingEvent picks the events worth a journal line: credentials,
+// commands, and anything indicating abuse. Plain connections and payload
+// dumps are left to the dashboard and events.ndjson.
+func interestingEvent(e eventlog.Event) bool {
+	switch e.Type {
+	case "auth_success", "authenticated", "login_attempt", "auth_attempt",
+		"command", "exec", "mail_relay", "relay_attempt", "proxy_connect",
+		"proxy_request", "upload_attempt", "amplification_attempt",
+		"service_error", "server_error", "handler_error", "startup", "shutdown":
+		return true
+	}
+	return false
 }
 
 func formatEvent(e eventlog.Event) string {

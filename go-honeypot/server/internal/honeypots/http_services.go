@@ -53,7 +53,8 @@ func (h *WebAPI) Start() error {
 		Addr:              ":" + strconv.Itoa(cfg.Port),
 		ReadHeaderTimeout: 8_000_000_000,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(io.LimitReader(r.Body, 256*1024))
+			// Capped low on purpose: whatever is read here is retained per event.
+			body, _ := io.ReadAll(io.LimitReader(r.Body, 16*1024))
 			_ = r.Body.Close()
 			ip, remotePort := splitHostPort(r.RemoteAddr)
 			meta := ConnMeta{RemoteIP: ip, RemotePort: remotePort, LocalPort: h.Port()}

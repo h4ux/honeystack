@@ -82,7 +82,7 @@ func main() {
 	// Public address tracking: keeps a hostname pointed at this host when
 	// its IP is not static, and records every change. Created before the
 	// banner so the banner can print the URL, started after the API is up.
-	tracker := pubaddr.New(cfg.Dyn(), store)
+	tracker := pubaddr.New(cfg.Dyn(), cfg.Bcn(), cfg.Control.Port, store)
 	defer tracker.Close()
 
 	// Mirror events to stdout for operators. On a scanned host this goes to
@@ -152,8 +152,11 @@ func main() {
 		}
 		if st.IP != "" {
 			parts = append(parts, st.IP)
-		} else if st.Enabled {
+		} else if st.Enabled || st.Beacon.Enabled {
 			parts = append(parts, "public IP pending")
+		}
+		if st.Beacon.Enabled {
+			parts = append(parts, "beacon "+st.Beacon.Status)
 		}
 		parts = append(parts, fmt.Sprintf("control :%d", cfg.Control.Port))
 		parts = append(parts, fmt.Sprintf("%d listeners", len(mgr.List())))
@@ -166,6 +169,9 @@ func main() {
 				st.URL, st.IP, st.UpdateStatus)
 		}
 	})
+	if loc := tracker.BeaconLocator(); loc != "" {
+		log.Printf("[beacon] this host publishes its address to %s", loc)
+	}
 	sdnotify.Ready(statusLine())
 	tracker.Start(ctx)
 
@@ -374,6 +380,10 @@ func printBanner(cfg config.Config, key string, addr *pubaddr.Tracker) {
 		fmt.Printf("  geoip            : on (%s) — attacker IPs are sent to this provider\n", provider)
 	} else {
 		fmt.Println("  geoip            : off")
+	}
+	if b := addr.Beacon(); b.Enabled && b.Locator != "" {
+		fmt.Println("  beacon           : " + b.Locator)
+		fmt.Println("                     (paste into the dashboard once; it follows this host)")
 	}
 	if url := addr.URL(); url != "" {
 		fmt.Printf("  public address   : %s   (dyndns: %s, refreshed every %dm)\n",

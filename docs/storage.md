@@ -23,6 +23,7 @@ which is the install directory (`WorkingDirectory=` in the systemd unit).
     ├── events.ndjson.1              one rotated generation
     ├── geoip-cache.json             IP → country cache
     ├── dyndns.json                  0600, dynamic-DNS credentials
+    ├── beacon.json                  0600, beacon topic + verify key
     ├── ip-history.json              this host's public IP over time
     └── ssh_host_ed25519_key         0600, generated once, then stable
 
@@ -57,6 +58,7 @@ Which paths the daemon uses is configurable:
 | `data/geoip-cache.json` | `internal/geoip` | every 2 min if dirty, and on shutdown | **temp + rename** (atomic) | 0644 |
 | `data/ip-history.json` | `internal/pubaddr` | on every public-IP change | **temp + rename** (atomic) | 0644 |
 | `data/dyndns.json` | the installer (or you) | once, at install | **temp + rename** (atomic) | **0600** |
+| `data/beacon.json` | `internal/pubaddr` | generated on first start if absent | **temp + rename** (atomic) | **0600** |
 
 Three different patterns, chosen per file:
 
@@ -198,7 +200,9 @@ sudo tar czf honeystack-backup.tgz \
 ```
 
 Keeping the SSH host key means attackers see the same fingerprint after a
-rebuild. Add `data/dyndns.json` if you want to keep the same hostname. Do
+rebuild. Add `data/dyndns.json` to keep the same DNS name, and
+`data/beacon.json` to keep the same beacon URL — restore that one and every
+dashboard that already has the locator keeps working. Do
 **not** back up `auth.key` — it is regenerated per start.
 
 `data/ip-history.json` is a plain array of `{ts, ip, previousIp, source,

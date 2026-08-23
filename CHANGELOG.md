@@ -21,6 +21,17 @@ are no versioned releases yet: `main` is published continuously as the
 
 ### Added
 
+- **Beacon: the dashboard finds the host after its IP changes.** The
+  daemon publishes a signed `{ip, controlPort, updatedAt}` document to a URL
+  that never changes (ntfy.sh by default — no account, and it serves
+  `access-control-allow-origin: *` so the static dashboard can read it).
+  The dashboard learns the locator on first connect, and when the socket
+  drops it reads the beacon, verifies the HMAC against the key held in the
+  URL fragment, and reconnects at the new address. A `custom` backend
+  covers any endpoint that accepts a body and serves it back with CORS.
+- **Cloudflare DNS provider** for anyone who owns a domain: discovers zone
+  and record by name, creates the A record when missing, then PATCHes it
+  (TTL 60, proxy off) with a scoped API token.
 - **Public address tracking and dynamic DNS.** The daemon polls its own
   public IP every `dyndns.intervalMinutes` (default 5), records every
   change to `data/ip-history.json`, logs it as a `public_ip_changed`

@@ -76,6 +76,7 @@ DYNDNS_USER=""
 DYNDNS_PASS=""
 DYNDNS_HOST=""
 DYNDNS_PROVIDER=""
+BEACON_ENABLED=0
 ADMIN_USER="${SUDO_USER:-}"
 
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/main/go-honeypot/server"
@@ -434,120 +435,78 @@ EOF
 
 # ==================================================== step 2b: public name
 configure_dyndns() {
-  step "Step 3/5 — a public name for this box"
-  note "A honeypot on a dynamic IP loses its dashboard bookmark whenever the"
-  note "address changes. Two options, both free and neither needs an account:"
-  note "  sslip.io  — the name encodes the address (62-228-88-158.sslip.io)."
-  note "              Always resolves, nothing to register, but the name"
-  note "              changes when the address does."
-  note "  xyz.frl   — a stable random name you keep. No signup either, but at"
-  note "              the time of writing its names were not resolving."
-  note "Either way the daemon tracks the address every 5 minutes and logs"
-  note "every change in the dashboard."
+  step "Step 3/5 — how to find this box after its IP changes"
+  note "Two independent mechanisms, both optional:"
+  note "  beacon  — the daemon publishes {ip, port} to a URL that never"
+  note "            changes (ntfy.sh, no account). Paste that URL into the"
+  note "            dashboard once and it follows this host forever, even"
+  note "            when the address moves. Signed, so nobody else can"
+  note "            redirect your dashboard."
+  note "  dns     — a hostname that points here. Needs either a domain you"
+  note "            own (Cloudflare token) or a provider account. Skip it"
+  note "            unless you have one; the beacon already solves finding."
+  note "Either way every address change is recorded in the dashboard."
 
-  if (( ! DO_DYNDNS )); then warn "skipped (--skip-dyndns)"; return; fi
+  if (( ! DO_DYNDNS )); then
+    warn "skipped (--skip-dyndns): no beacon, no DNS"
+    set_beacon_config "false"
+    return
+  fi
 
-  local mode=""
-  if [[ -n "$DYNDNS_USER" && -n "$DYNDNS_PASS" ]]; then
-    mode="credentials"
-    log "using the credentials passed on the command line"
-  elif ask "Set up a public name for this host?" y; then
-    if ask "Use sslip.io (nothing to register, name follows the IP)?" y; then
-      mode="derived"
-    elif ask "Try xyz.frl instead (stable name, may not resolve yet)?" n; then
-      mode="xyzfrl"
-    else
-      mode="none"
-    fi
+  if ask "Publish a beacon so the dashboard can always find this host?" y; then
+    set_beacon_config "true"
+    BEACON_ENABLED=1
   else
-    mode="none"
+    set_beacon_config "false"
+    warn "no beacon — you will need the current IP to reach the dashboard"
   fi
 
-  if [[ "$mode" == "none" ]]; then
-    warn "no public name — the daemon still tracks and logs IP changes"
-    DYNDNS_PROVIDER="sslip.io"
-    set_dyndns_config "false" "sslip.io"
-    return
-  fi
-
-  if [[ "$mode" == "derived" ]]; then
-    DYNDNS_PROVIDER="sslip.io"
-    set_dyndns_config "true" "sslip.io"
-    local ip
-    ip="$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)"
-    if [[ -n "$ip" ]]; then
-      DYNDNS_HOST="$(printf '%s' "$ip" | tr '.' '-').sslip.io"
-      ok "public name: ${DYNDNS_HOST}"
-      if command -v getent >/dev/null 2>&1 && getent hosts "$DYNDNS_HOST" >/dev/null 2>&1; then
-        ok "${DYNDNS_HOST} resolves"
-      else
-        note "could not resolve it from here; the daemon will keep reporting it"
-      fi
-    else
-      ok "sslip.io selected; the daemon derives the name once it sees its address"
-    fi
-    return
-  fi
-
-  if [[ "$mode" == "xyzfrl" ]]; then
-    log "requesting a hostname from https://xyz.frl/generate"
-    local json
-    json="$(curl -fsSL --show-error -m 20 https://xyz.frl/generate 2>&1)" || {
-      warn "could not reach xyz.frl: ${json}"
-      note "falling back to sslip.io"
-      DYNDNS_PROVIDER="sslip.io"
-      set_dyndns_config "true" "sslip.io"
-      return
-    }
-    DYNDNS_HOST="$(printf '%s' "$json" | sed -n 's/.*"hostname"[: ]*"\([^"]*\)".*/\1/p')"
-    DYNDNS_USER="$(printf '%s' "$json" | sed -n 's/.*"username"[: ]*"\([^"]*\)".*/\1/p')"
-    DYNDNS_PASS="$(printf '%s' "$json" | sed -n 's/.*"password"[: ]*"\([^"]*\)".*/\1/p')"
-    if [[ -z "$DYNDNS_HOST" || -z "$DYNDNS_USER" || -z "$DYNDNS_PASS" ]]; then
-      warn "unexpected response from xyz.frl: $(printf '%s' "$json" | head -c 120)"
-      note "falling back to sslip.io"
-      DYNDNS_PROVIDER="sslip.io"
-      set_dyndns_config "true" "sslip.io"
-      return
-    fi
-    ok "hostname: ${DYNDNS_HOST}"
-  fi
-
-  # A registered name (xyz.frl or credentials given on the command line).
-  DYNDNS_PROVIDER="${DYNDNS_PROVIDER:-xyz.frl}"
-  install -d -m 0750 "$INSTALL_DIR/data"
-  cat > "$INSTALL_DIR/data/dyndns.json" <<EOF
+  # DNS is now the optional extra, and only worth offering if they have a
+  # provider. Anonymous DNS was tried and does not work (see the README).
+  if [[ -n "$DYNDNS_USER$DYNDNS_PASS$DYNDNS_HOST" ]]; then
+    DYNDNS_PROVIDER="${DYNDNS_PROVIDER:-xyz.frl}"
+    install -d -m 0750 "$INSTALL_DIR/data"
+    cat > "$INSTALL_DIR/data/dyndns.json" <<EOF
 {
   "hostname": "${DYNDNS_HOST}",
   "username": "${DYNDNS_USER}",
-  "password": "${DYNDNS_PASS}"
+  "password": "${DYNDNS_PASS}",
+  "token": "${DYNDNS_PASS}"
 }
 EOF
-  chmod 0600 "$INSTALL_DIR/data/dyndns.json"
-  id "$SVC_USER" &>/dev/null && chown "$SVC_USER":"$SVC_USER" "$INSTALL_DIR/data/dyndns.json"
-  ok "credentials stored in ${INSTALL_DIR}/data/dyndns.json (0600)"
-  set_dyndns_config "true" "$DYNDNS_PROVIDER"
-
-  local ip code
-  ip="$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)"
-  if [[ -n "$ip" ]]; then
-    code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 --user "${DYNDNS_USER}:${DYNDNS_PASS}" \
-             "https://xyz.frl/nic/update?myip=${ip}" || true)"
-    case "$code" in
-      2*)  ok "first update accepted (HTTP ${code}) for ${ip}" ;;
-      429) warn "provider rate-limited the first update — the daemon will retry" ;;
-      *)   warn "first update returned HTTP ${code:-none}; the daemon will keep trying" ;;
-    esac
-    sleep 3
-    if command -v getent >/dev/null 2>&1 && getent hosts "$DYNDNS_HOST" >/dev/null 2>&1; then
-      ok "${DYNDNS_HOST} resolves"
-    else
-      warn "${DYNDNS_HOST} does not resolve yet"
-      note "xyz.frl accepts updates but may not publish records. Switch to the"
-      note "no-signup fallback any time:  dyndns.provider = \"sslip.io\" in"
-      note "${INSTALL_DIR}/config.json (delete data/dyndns.json), or point"
-      note "dyndns.updateUrl at a provider you control."
-    fi
+    chmod 0600 "$INSTALL_DIR/data/dyndns.json"
+    id "$SVC_USER" &>/dev/null && chown "$SVC_USER":"$SVC_USER" "$INSTALL_DIR/data/dyndns.json"
+    ok "DNS credentials stored (0600); provider ${DYNDNS_PROVIDER}"
+    set_dyndns_config "true" "$DYNDNS_PROVIDER"
+  else
+    set_dyndns_config "false" "cloudflare"
+    note "no DNS configured. To add one later (a domain you own):"
+    note "  echo '{\"token\":\"<cloudflare-token>\"}' > ${INSTALL_DIR}/data/dyndns.json"
+    note "  then set dyndns.enabled/provider/hostname/zone in config.json"
   fi
+}
+
+# set_beacon_config <enabled>
+set_beacon_config() {
+  local enabled="$1"
+  if ! command -v python3 >/dev/null 2>&1 || [[ ! -f "$INSTALL_DIR/config.json" ]]; then
+    warn "could not edit config.json — set beacon.enabled by hand"
+    return
+  fi
+  python3 - "$INSTALL_DIR/config.json" "$enabled" <<'PY'
+import json, sys
+path, enabled = sys.argv[1], sys.argv[2] == "true"
+with open(path) as f:
+    cfg = json.load(f)
+b = cfg.setdefault("beacon", {})
+b["enabled"] = enabled
+b.setdefault("provider", "ntfy")
+b.setdefault("server", "https://ntfy.sh")
+b.setdefault("credentialsFile", "data/beacon.json")
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+PY
+  ok "beacon: enabled=${enabled} (the URL is printed at the end and by 'systemctl status')"
 }
 
 # set_dyndns_config <enabled> <provider>
@@ -737,12 +696,27 @@ summary() {
   local dyn_line="not configured (IP changes are still tracked)"
   if [[ -n "$DYNDNS_HOST" ]]; then
     dyn_line="https://${DYNDNS_HOST}  (${DYNDNS_PROVIDER:-dyndns}, refreshed every 5 min)"
-  elif [[ -n "$DYNDNS_PROVIDER" ]]; then
-    dyn_line="${DYNDNS_PROVIDER} — name appears in 'systemctl status ${SERVICE_NAME}'"
+  fi
+  local beacon_line="disabled"
+  if (( BEACON_ENABLED )); then
+    # The daemon generates the identity on first start; read it back.
+    local topic key
+    if [[ -r "$INSTALL_DIR/data/beacon.json" ]]; then
+      topic="$(sed -n 's/.*"topic"[: ]*"\([^"]*\)".*/\1/p' "$INSTALL_DIR/data/beacon.json")"
+      key="$(sed -n 's/.*"verifyKey"[: ]*"\([^"]*\)".*/\1/p' "$INSTALL_DIR/data/beacon.json")"
+    fi
+    if [[ -n "$topic" ]]; then
+      beacon_line="https://ntfy.sh/${topic}/json?poll=1#${key}"
+    else
+      beacon_line="enabled — the URL appears in 'systemctl status ${SERVICE_NAME}' once it starts"
+    fi
   fi
   cat <<SUM
   real SSH      : ssh -p ${SSH_PORT} ${ADMIN_USER:-<user>}@${ip}
-  public name   : ${dyn_line}
+  beacon        : ${beacon_line}
+                  ^ save this: paste it into the dashboard once and it will
+                    keep finding this host after the IP changes
+  dns name      : ${dyn_line}
   service       : systemctl status ${SERVICE_NAME}   ·   journalctl -u ${SERVICE_NAME} -f
   binary        : ${BIN_PATH}
   config        : ${INSTALL_DIR}/config.json

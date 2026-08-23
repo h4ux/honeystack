@@ -49,13 +49,45 @@ type DynDNS struct {
 	Hostname        string `json:"hostname,omitempty"`
 	Username        string `json:"username,omitempty"`
 	Password        string `json:"password,omitempty"`
-	// UpdateURL overrides the provider. {ip}, {hostname}, {username} and
-	// {password} are substituted before the request.
-	UpdateURL       string   `json:"updateUrl,omitempty"`
+	// UpdateURL overrides the provider. {ip}, {hostname}, {username},
+	// {password} and {token} are substituted before the request.
+	UpdateURL string `json:"updateUrl,omitempty"`
+	// Method, Headers and Body turn UpdateURL into a generic REST call, so
+	// providers that need PATCH/POST with JSON (Cloudflare, deSEC, Hetzner,
+	// DigitalOcean…) work without new code.
+	Method  string            `json:"method,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
+	// Zone is the DNS zone for API providers that address records by zone,
+	// e.g. "example.com" when Hostname is "hp.example.com".
+	Zone string `json:"zone,omitempty"`
+	// Token is an API token; it can also live in the credentials file.
+	Token string `json:"token,omitempty"`
+	// VerifyDNS resolves the hostname after each update and reports whether
+	// it actually points here. Default true — a provider that accepts
+	// updates but publishes nothing is otherwise invisible.
+	VerifyDNS       *bool    `json:"verifyDns,omitempty"`
 	IntervalMinutes int      `json:"intervalMinutes,omitempty"`
 	IPCheckURLs     []string `json:"ipCheckUrls,omitempty"`
 	HistoryFile     string   `json:"historyFile,omitempty"`
 	MaxHistory      int      `json:"maxHistory,omitempty"`
+}
+
+// Beacon publishes a small document saying where this host currently is,
+// to a URL that never changes. The dashboard reads it to find the daemon
+// again after the address moves — no DNS, no account.
+type Beacon struct {
+	Enabled         bool   `json:"enabled"`
+	Provider        string `json:"provider,omitempty"` // ntfy | custom
+	Server          string `json:"server,omitempty"`   // default https://ntfy.sh
+	Topic           string `json:"topic,omitempty"`    // default: generated once
+	CredentialsFile string `json:"credentialsFile,omitempty"`
+	// URL/ReadURL/Method/Headers drive a custom backend (any endpoint that
+	// accepts a PUT/POST body and serves it back with CORS).
+	URL     string            `json:"url,omitempty"`
+	ReadURL string            `json:"readUrl,omitempty"`
+	Method  string            `json:"method,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // GeoIP controls country lookups for attacker IPs. Lookups go to a public
@@ -105,6 +137,7 @@ type Config struct {
 	Storage  Storage            `json:"storage"`
 	GeoIP    *GeoIP             `json:"geoip,omitempty"`
 	DynDNS   *DynDNS            `json:"dyndns,omitempty"`
+	Beacon   *Beacon            `json:"beacon,omitempty"`
 	Services map[string]Service `json:"services"`
 }
 
@@ -198,6 +231,14 @@ func (c Config) Dyn() DynDNS {
 	return *c.DynDNS
 }
 
+// Bcn returns the beacon block, or a disabled one when absent.
+func (c Config) Bcn() Beacon {
+	if c.Beacon == nil {
+		return Beacon{Enabled: false}
+	}
+	return *c.Beacon
+}
+
 // Geo returns the geoip block with defaults filled in, so callers never
 // have to nil-check it.
 func (c Config) Geo() GeoIP {
@@ -250,6 +291,9 @@ func merge(base, override Config) Config {
 	}
 	if override.DynDNS != nil {
 		out.DynDNS = override.DynDNS
+	}
+	if override.Beacon != nil {
+		out.Beacon = override.Beacon
 	}
 	if override.Services != nil {
 		if out.Services == nil {

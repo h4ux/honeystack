@@ -38,6 +38,12 @@
     "historyFile": "data/ip-history.json",
     "maxHistory": 200
   },
+  "beacon": {
+    "enabled": true,
+    "provider": "ntfy",
+    "server": "https://ntfy.sh",
+    "credentialsFile": "data/beacon.json"
+  },
   "services": {
     "ssh": {
       "enabled": true,

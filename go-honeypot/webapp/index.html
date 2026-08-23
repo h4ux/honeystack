@@ -32,6 +32,10 @@
         <label>Host / IP <input id="conn-host" placeholder="127.0.0.1" autocomplete="off"></label>
         <label>Port <input id="conn-port" type="number" min="1" max="65535" value="9090"></label>
       </div>
+      <label>Beacon <span class="muted">(optional — finds the host after its IP changes)</span>
+        <input id="conn-beacon" placeholder="https://ntfy.sh/honeystack-…/json?poll=1#verifykey" autocomplete="off">
+      </label>
+      <div id="beacon-hint" class="muted beacon-hint" hidden></div>
       <label>Auth key <input id="conn-key" placeholder="paste the hex auth key" required autocomplete="off"></label>
       <label class="checkbox" id="conn-secure-row"><input id="conn-secure" type="checkbox"> use wss:// (TLS)</label>
       <label class="checkbox"><input id="conn-remember" type="checkbox" checked> remember on this device</label>
@@ -226,6 +230,7 @@
           <span class="muted" id="pubaddr-status"></span>
         </div>
         <div id="pubaddr-summary" class="pubaddr-summary"></div>
+        <div id="pubaddr-beacon"></div>
         <div class="table-scroll" id="pubaddr-history-wrap">
           <table id="pubaddr-history">
             <thead><tr><th>When</th><th>Address</th><th>Previous</th><th>Seen via</th><th>DNS update</th></tr></thead>

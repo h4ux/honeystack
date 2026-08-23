@@ -45,19 +45,20 @@ type Change struct {
 
 // Status is what the API and dashboard render.
 type Status struct {
-	Enabled      bool     `json:"enabled"`
-	Provider     string   `json:"provider,omitempty"`
-	Hostname     string   `json:"hostname,omitempty"`
-	URL          string   `json:"url,omitempty"`
-	IP           string   `json:"ip,omitempty"`
-	Source       string   `json:"source,omitempty"`
-	LastCheck    int64    `json:"lastCheck,omitempty"`
-	LastChange   int64    `json:"lastChange,omitempty"`
-	LastUpdate   int64    `json:"lastUpdate,omitempty"`
-	UpdateStatus string   `json:"updateStatus,omitempty"`
-	IntervalMin  int      `json:"intervalMinutes,omitempty"`
-	Changes      int      `json:"changes"`
-	History      []Change `json:"history,omitempty"`
+	Enabled      bool         `json:"enabled"`
+	Provider     string       `json:"provider,omitempty"`
+	Hostname     string       `json:"hostname,omitempty"`
+	URL          string       `json:"url,omitempty"`
+	IP           string       `json:"ip,omitempty"`
+	Source       string       `json:"source,omitempty"`
+	LastCheck    int64        `json:"lastCheck,omitempty"`
+	LastChange   int64        `json:"lastChange,omitempty"`
+	LastUpdate   int64        `json:"lastUpdate,omitempty"`
+	UpdateStatus string       `json:"updateStatus,omitempty"`
+	IntervalMin  int          `json:"intervalMinutes,omitempty"`
+	Changes      int          `json:"changes"`
+	Beacon       BeaconStatus `json:"beacon"`
+	History      []Change     `json:"history,omitempty"`
 }
 
 // Credentials are stored separately from config.json, at 0600.
@@ -65,6 +66,7 @@ type Credentials struct {
 	Hostname string `json:"hostname"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	Token    string `json:"token,omitempty"`
 }
 
 const (
@@ -82,9 +84,15 @@ var defaultIPCheckURLs = []string{
 }
 
 type Tracker struct {
-	cfg   config.DynDNS
-	creds Credentials
-	store *eventlog.Store
+	cfg         config.DynDNS
+	creds       Credentials
+	store       *eventlog.Store
+	beacon      *beacon
+	controlPort int
+
+	// Cloudflare ids, discovered once and reused.
+	cfZoneID   string
+	cfRecordID string
 
 	client *http.Client
 
@@ -106,17 +114,27 @@ type Tracker struct {
 	onChange func(Status)
 }
 
-func New(cfg config.DynDNS, store *eventlog.Store) *Tracker {
+// New builds a tracker. beaconCfg and controlPort drive the beacon: the
+// document the dashboard reads to find this host after it moves.
+func New(cfg config.DynDNS, beaconCfg config.Beacon, controlPort int, store *eventlog.Store) *Tracker {
 	t := &Tracker{
-		cfg:     cfg,
-		store:   store,
-		client:  &http.Client{Timeout: httpTimeout},
-		closeCh: make(chan struct{}),
+		cfg:         cfg,
+		store:       store,
+		controlPort: controlPort,
+		client:      &http.Client{Timeout: httpTimeout},
+		closeCh:     make(chan struct{}),
 	}
 	t.creds = loadCredentials(cfg)
+	t.beacon = newBeacon(beaconCfg, controlPort)
 	t.loadHistory()
 	return t
 }
+
+// Beacon exposes the beacon's status for the API and the banner.
+func (t *Tracker) Beacon() BeaconStatus { return t.beacon.status_() }
+
+// BeaconLocator is the single string that finds this host again.
+func (t *Tracker) BeaconLocator() string { return t.beacon.locator() }
 
 // SetOnChange registers a callback fired after every recorded change.
 func (t *Tracker) SetOnChange(fn func(Status)) {
@@ -188,7 +206,9 @@ func (t *Tracker) URL() string {
 // Start begins polling. It runs one check immediately so the banner and the
 // dashboard have an address without waiting for the first tick.
 func (t *Tracker) Start(ctx context.Context) {
-	if !t.cfg.Enabled {
+	// Address tracking is worth doing on its own: it feeds the beacon, the
+	// change log and the status line even with dynamic DNS switched off.
+	if !t.cfg.Enabled && !t.beacon.enabled() {
 		return
 	}
 	interval := time.Duration(t.intervalMinutes()) * time.Minute
@@ -264,6 +284,13 @@ func (t *Tracker) checkOnce(ctx context.Context) {
 		t.lastUpdate = now
 	}
 	t.mu.Unlock()
+
+	// Refresh the beacon on every tick, not only on change: ntfy retains a
+	// message for ~12h, so a quiet host would otherwise fall off it.
+	t.beacon.publish(ctx, BeaconDoc{
+		IP: ip, ControlPort: t.controlPort, Hostname: t.Hostname(),
+		Changes: len(t.history),
+	})
 
 	if !changed {
 		return
@@ -373,6 +400,9 @@ func (t *Tracker) pushUpdate(ctx context.Context, ip string, changed bool) (stri
 	if derivedZone(t.cfg.Provider) != "" && t.cfg.UpdateURL == "" {
 		return "derived", 0
 	}
+	if strings.EqualFold(t.cfg.Provider, "cloudflare") && t.cfg.UpdateURL == "" {
+		return t.updateCloudflare(ctx, ip)
+	}
 	url := t.updateURL(ip)
 	if url == "" {
 		return "no-provider", 0
@@ -469,6 +499,18 @@ func (t *Tracker) username() string {
 	return t.creds.Username
 }
 
+// token prefers an explicit API token, then the credentials file's token
+// or password field.
+func (t *Tracker) token() string {
+	if t.cfg.Token != "" {
+		return t.cfg.Token
+	}
+	if t.creds.Token != "" {
+		return t.creds.Token
+	}
+	return t.creds.Password
+}
+
 func (t *Tracker) password() string {
 	if t.cfg.Password != "" {
 		return t.cfg.Password
@@ -503,6 +545,7 @@ func (t *Tracker) Status() Status {
 		st.LastUpdate = t.lastUpdate.UnixMilli()
 	}
 	// Newest first: the dashboard renders it as a log.
+	st.Beacon = t.beacon.status_()
 	st.History = make([]Change, 0, len(t.history))
 	for i := len(t.history) - 1; i >= 0; i-- {
 		st.History = append(st.History, t.history[i])

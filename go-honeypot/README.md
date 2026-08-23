@@ -314,101 +314,114 @@ Every event and session carries the source country when it is known:
   dashboard then shows `··` instead of a flag. Point `geoip.url` at your
   own service (with an `{ip}` placeholder) to self-host the lookup.
 
-## A stable address on a changing IP
+## Finding the box after its IP changes
 
-A honeypot on a dynamic IP silently breaks every bookmark when it is
-renumbered. The daemon tracks its own public address, records every change,
-and — when a dynamic-DNS credential is configured — keeps a hostname
-pointed at it.
+A honeypot on a dynamic IP breaks every dashboard bookmark when it is
+renumbered. There are two mechanisms; the first needs no account and is on
+by default.
+
+### The beacon (default)
+
+The daemon publishes a small signed document — `{ip, controlPort,
+updatedAt, …}` — to a URL that never changes. The dashboard learns that URL
+the first time it connects, and consults it whenever the socket drops. The
+bookmark that matters becomes the *beacon*, not the address.
+
+```jsonc
+"beacon": {
+  "enabled": true,
+  "provider": "ntfy",                    // ntfy | custom
+  "server": "https://ntfy.sh",
+  "credentialsFile": "data/beacon.json"  // generated topic + verify key, 0600
+}
+```
+
+Why ntfy.sh: a topic is just a random string (no signup, no account, no
+token), and it answers browsers with `access-control-allow-origin: *`,
+which is what lets the static dashboard read it directly from Vercel or
+`file://`. The daemon publishes on every address change and on every
+refresh tick, because ntfy retains a message for about 12 hours.
+
+The locator printed at startup is the one string worth keeping:
+
+```
+beacon : https://ntfy.sh/honeystack-c56fcbe…/json?poll=1#b8f4adfcf870ecfa…
+         └─ read URL (public)                            └─ verify key (never sent)
+```
+
+**Why it is signed.** Anyone who knows an ntfy topic can also post to it. A
+forged document could otherwise point your dashboard — and the auth key it
+sends — at someone else's server. So each document carries an HMAC-SHA256
+over its address fields, keyed by the verify key in the URL *fragment*
+(browsers never send fragments to servers). The dashboard rejects any
+document whose signature does not match, and says so.
+
+The document deliberately contains no secret: topic and IP only. The auth
+key is never published.
+
+What it costs: one small HTTPS POST every 5 minutes, and the fact that
+whoever holds the locator knows this host's address.
+
+Custom backend — any endpoint that takes a body and serves it back with
+CORS:
+
+```jsonc
+"beacon": {
+  "enabled": true, "provider": "custom",
+  "url": "https://example.com/beacon", "readUrl": "https://example.com/beacon",
+  "method": "PUT", "headers": { "Authorization": "Bearer …" }
+}
+```
+
+### DNS (optional)
+
+Only worth it if you already have somewhere to put a record. Anonymous
+dynamic DNS was investigated and does not hold up: `xyz.frl` accepts
+updates (HTTP 202) but its names returned NXDOMAIN from the authoritative
+server minutes later; `yourddns.com` was serving an expired certificate;
+DuckDNS and No-IP both require an account (DuckDNS via OAuth), so no script
+can provision them.
 
 ```jsonc
 "dyndns": {
   "enabled": true,
-  "provider": "sslip.io",                   // sslip.io | xyz.frl | duckdns | noip | custom
-  "credentialsFile": "data/dyndns.json",    // 0600, written at install time
-  "intervalMinutes": 5,
-  "ipCheckUrls": ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"],
-  "historyFile": "data/ip-history.json",
-  "maxHistory": 200
+  "provider": "cloudflare",        // cloudflare | duckdns | noip | xyz.frl | sslip.io | custom
+  "hostname": "hp.example.com",
+  "zone": "example.com",           // optional; inferred from hostname
+  "credentialsFile": "data/dyndns.json",   // {"token": "…"} at 0600
+  "intervalMinutes": 5
 }
 ```
 
-Every `intervalMinutes` the daemon asks an echo service for its address
-(first one that answers with a valid IP wins) and pushes it to the
-provider. On a change it appends to `data/ip-history.json`, logs a
-`public_ip_changed` event — so it appears in the live feed, history and
-PDF like anything else — and refreshes the systemd status line.
-
-**Where you see it:**
-
-- **Startup banner**, so `journalctl -u honeypot-go` answers "what is the
-  URL again?":
-  ```
-  public address   : https://8355e9ec….xyz.frl   (dyndns: xyz.frl, refreshed every 5m)
-  ```
-- **`systemctl status honeypot-go`**, via `sd_notify`. The unit sets
-  `NotifyAccess=main` and the daemon publishes a status line that tracks
-  the current address:
-  ```
-  Status: "https://8355e9ec….xyz.frl · 203.0.113.9 · control :9090 · 41 listeners"
-  ```
-- **Dashboard → Stats → Public address**: the hostname as a link, current
-  IP, number of changes, when it was last checked/changed, the last update
-  result, and a table of every change (when, new address, previous
-  address, which echo service saw it, what the provider answered).
-- **`GET /v1/pubaddr`** (or the `get_pubaddr` action) for the same data.
-
-### Providers
-
-There are two kinds. **Derived** providers need no account, no credential
-and no update request at all — the address is encoded in the name, so the
-daemon just computes it. **Registered** providers give you a name that
-stays the same across IP changes, at the cost of holding a credential.
-
-| Provider | Kind | Signup | Request |
+| Provider | Kind | Needs | Stable name |
 |---|---|---|---|
-| `sslip.io` (default) | derived | none | none — `62-228-88-158.sslip.io` resolves to `62.228.88.158` |
-| `nip.io`, `traefik.me` | derived | none | none — same scheme, different zone |
-| `xyz.frl` | registered | none (anonymous `GET /generate`) | `https://xyz.frl/nic/update?myip={ip}` + basic auth |
-| `duckdns` | registered | **yes** — OAuth login (GitHub/Google/…) for a token | `https://www.duckdns.org/update?domains={hostname}&token={password}&ip={ip}` |
-| `noip` | registered | **yes** | `https://dynupdate.no-ip.com/nic/update?hostname={hostname}&myip={ip}` + basic auth |
-| anything else | registered | depends | `https://<provider>/nic/update?myip={ip}` + basic auth |
+| `cloudflare` | API (PATCH + bearer token) | a domain you own, token scoped Zone→DNS→Edit | yes |
+| `duckdns`, `noip` | GET + token | an account | yes |
+| `xyz.frl` | GET + basic auth | nothing | in principle — **not resolving when tested** |
+| `sslip.io`, `nip.io` | derived | nothing | no — the name encodes the address, so it changes with it |
+| `custom` | `updateUrl` (+ `method`, `headers`, `body`) | whatever your provider needs | yes |
 
-`updateUrl` overrides the template entirely; `{ip}`, `{hostname}`,
-`{username}` and `{password}` are substituted, and credentials are also
-sent as HTTP basic auth.
+The Cloudflare client discovers the zone and record by name, creates the A
+record if it does not exist, and PATCHes it thereafter with TTL 60 and
+proxying off. It is the recommended option if you own a domain.
 
-**Which to pick.** `sslip.io` is the default because it works with nothing
-but the config line: it always resolves, there is no account, no token and
-no outbound update call. The trade is that the name changes when the
-address does — the dashboard, the banner and `systemctl status` always
-show the current one, and every change is in the log, so you re-copy the
-URL after a change rather than keeping a permanent bookmark. If you want a
-name that never changes, either use a provider you already have (point
-`updateUrl` at Cloudflare, your registrar's API, DuckDNS after a 30-second
-login) or try `xyz.frl`, noting the caveat below.
+### Either way: the change log
 
-> **Caveat on xyz.frl.** `scripts/deploy-remote.sh` can mint a free,
-> anonymous hostname there (`GET https://xyz.frl/generate`), and the
-> service accepts updates (`HTTP 202`). At the time of writing the
-> generated names did **not** resolve — the authoritative nameserver
-> answered `NXDOMAIN` for a freshly updated hostname, with both a
-> documentation IP and a real public IP, minutes after a successful
-> update. Treat the hostname as best-effort until you have confirmed it
-> resolves for you (`getent hosts <name>`), and switch `provider` to
-> DuckDNS or your own DNS if it does not. **IP tracking, the change log
-> and the status line work regardless of the provider** — that part does
-> not depend on anyone publishing a record.
+Every address change is recorded regardless of which mechanism is on:
+appended to `data/ip-history.json`, logged as a `public_ip_changed` event
+(so it appears in the live feed, history and PDF), and shown in
+**Stats → Public address** with when it happened, the previous address,
+which echo service saw it, and what the DNS/beacon update did. The current
+address and beacon status also appear in the startup banner and in
+`systemctl status honeypot-go`.
 
-Rate limits are respected: updates are never sent more than once a minute,
-`429` is recorded as `rate-limited` and retried on the next tick, and
-`401` shows as `unauthorized` rather than being retried blindly.
+**One caveat worth knowing:** if the daemon *restarts* (rather than just
+being renumbered), the auth key rotates by design. The beacon will point
+the dashboard at the new address automatically, and you paste the new key
+from `data/auth.key`. A plain IP change with no restart needs nothing from
+you at all.
 
-**Privacy:** enabling this tells an IP-echo service and your DNS provider
-this host's address. Set `dyndns.enabled` to `false` to keep everything
-local; nothing else changes.
-
-## Version check and updating
+## Version check and updating## Version check and updating
 
 The daemon reports what it is (`/v1/version`, and in the `hello` payload):
 version, commit, Go version, platform, uptime, listener count, and the

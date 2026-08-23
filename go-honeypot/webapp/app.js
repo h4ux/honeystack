@@ -36,6 +36,7 @@
   // ---- Connection UI ----
   const remembered = safeParse(localStorage.getItem(STORAGE_KEY));
   if (remembered) {
+    $('#conn-beacon').value = remembered.beacon || '';
     $('#conn-host').value = remembered.host || '';
     $('#conn-port').value = remembered.port || 9090;
     $('#conn-key').value = remembered.key || '';
@@ -80,6 +81,7 @@
     const conn = {
       proxy: $('#conn-proxy').checked && !$('#conn-proxy-row').hidden,
       relay: $('#conn-relay').checked,
+      beacon: $('#conn-beacon').value.trim(),
       host: $('#conn-host').value.trim(),
       port: Number($('#conn-port').value),
       key: $('#conn-key').value.trim(),
@@ -181,7 +183,13 @@
       if (state.autoReconnect && wasConnected) {
         const delay = Math.min(30000, 1000 * Math.pow(2, state.reconnectAttempts++));
         $('#status-summary').textContent = `reconnecting in ${Math.round(delay / 1000)}s`;
-        setTimeout(() => { if (state.autoReconnect && state.ws === ws) connect(); }, delay);
+        setTimeout(async () => {
+          if (!state.autoReconnect || state.ws !== ws) return;
+          // After a couple of failed attempts, assume the host moved and ask
+          // the beacon rather than retrying a dead address forever.
+          if (state.reconnectAttempts >= 2 && await followBeacon('reconnect')) return;
+          connect();
+        }, delay);
       } else {
         showConnectDialog();
         $('#conn-error').textContent = ev.reason ? 'Disconnected: ' + ev.reason : 'Disconnected (code ' + ev.code + ')';
@@ -320,6 +328,9 @@
         state.build = msg.payload.build || null;
         state.geoStats = msg.payload.geo || null;
         state.pubaddr = msg.payload.pubaddr || null;
+        // First successful connection teaches the dashboard where to look
+        // next time — this is what makes an address change survivable.
+        rememberBeaconFromServer();
         renderUpdateState();
         checkForUpdate(false);
         state.events = msg.payload.events || [];
@@ -701,6 +712,116 @@
     } catch (err) { $('#config-status').textContent = err.message; }
   }
 
+  // ---- Beacon ----
+  // A beacon is a document at a URL that never changes, saying where the
+  // daemon currently is. The dashboard learns the URL on first connect and
+  // then uses it to find the host again after its address moves — so the
+  // bookmark that matters is the beacon, not the IP.
+  //
+  // Anyone who knows an ntfy topic can post to it, so a document is only
+  // trusted when its HMAC matches the verify key kept in the URL fragment
+  // (fragments never reach the server).
+  function parseBeacon(locator) {
+    if (!locator) return null;
+    const hash = locator.indexOf('#');
+    return {
+      url: hash >= 0 ? locator.slice(0, hash) : locator,
+      key: hash >= 0 ? locator.slice(hash + 1) : ''
+    };
+  }
+
+  async function hmacHex(key, message) {
+    const enc = new TextEncoder();
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw', enc.encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(message));
+    return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function verifyBeaconDoc(doc, key) {
+    if (!key) return true;              // no key configured: accept, but say so
+    if (!doc || !doc.sig) return false;
+    const payload = [doc.v || 1, doc.ip || '', doc.controlPort || 0,
+      doc.hostname || '', doc.updatedAt || 0, doc.instance || ''].join('|');
+    try {
+      return (await hmacHex(key, payload)) === doc.sig;
+    } catch {
+      return false;                     // no WebCrypto (insecure origin): fail closed
+    }
+  }
+
+  // Fetch the newest document the beacon holds.
+  async function readBeacon(locator) {
+    const parsed = parseBeacon(locator);
+    if (!parsed || !parsed.url) return null;
+    const res = await fetch(parsed.url, { cache: 'no-store' });
+    if (!res.ok) throw new Error('beacon HTTP ' + res.status);
+    const text = await res.text();
+    // ntfy answers NDJSON (one message per line); a custom endpoint may
+    // answer the document itself.
+    let doc = null;
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      let parsedLine;
+      try { parsedLine = JSON.parse(line); } catch { continue; }
+      const candidate = typeof parsedLine.message === 'string'
+        ? safeParse(parsedLine.message)
+        : parsedLine;
+      if (candidate && candidate.ip) doc = candidate;   // keep the last one
+    }
+    if (!doc) return null;
+    const trusted = await verifyBeaconDoc(doc, parsed.key);
+    return { doc, trusted, hasKey: !!parsed.key };
+  }
+
+  // Ask the beacon where the host is, and connect there if it moved.
+  async function followBeacon(reason) {
+    const locator = (state.conn && state.conn.beacon) || $('#conn-beacon').value.trim();
+    if (!locator) return false;
+    const hint = $('#beacon-hint');
+    const show = (msg, cls) => {
+      if (!hint) return;
+      hint.hidden = false;
+      hint.className = 'muted beacon-hint ' + (cls || '');
+      hint.textContent = msg;
+    };
+    try {
+      show('Checking the beacon…');
+      const result = await readBeacon(locator);
+      if (!result) { show('Beacon has no address yet.', 'err'); return false; }
+      const { doc, trusted, hasKey } = result;
+      if (!trusted) {
+        show('Beacon signature did not verify — ignoring it. Someone may be posting to this topic.', 'err');
+        return false;
+      }
+      const age = doc.updatedAt ? ago(doc.updatedAt) : 'unknown age';
+      const moved = doc.ip && doc.ip !== state.conn?.host;
+      show(`Beacon: ${doc.ip}:${doc.controlPort || 9090} · updated ${age}` +
+        (hasKey ? ' · signature ok' : ' · unsigned'), 'ok');
+      if (!doc.ip) return false;
+      state.conn = Object.assign({}, state.conn, {
+        beacon: locator, host: doc.ip, port: doc.controlPort || state.conn?.port || 9090,
+        proxy: false
+      });
+      $('#conn-host').value = doc.ip;
+      $('#conn-port').value = state.conn.port;
+      if ($('#conn-remember').checked) localStorage.setItem(STORAGE_KEY, JSON.stringify(state.conn));
+      if (moved || reason === 'manual') {
+        connect();
+        return true;
+      }
+      return false;
+    } catch (err) {
+      show('Beacon unreachable: ' + err.message, 'err');
+      return false;
+    }
+  }
+
+  // Typing a beacon and pressing enter jumps straight to the host.
+  $('#conn-beacon').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); followBeacon('manual'); }
+  });
+
   // ---- GeoIP ----
   // The daemon annotates events it can resolve from cache at log time; the
   // rest are filled in here by asking for a batch of IPs and re-rendering.
@@ -985,8 +1106,19 @@
     $('#update-status').textContent = 'Checking…';
     checkForUpdate(true);
   });
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest ? e.target.closest('.copy-btn[data-copy-text]') : null;
+    if (!btn) return;
+    try {
+      await navigator.clipboard.writeText(btn.dataset.copyText);
+      const old = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = old; }, 1200);
+    } catch { /* clipboard blocked; the text is selectable anyway */ }
+  });
+
   $$('.copy-btn').forEach((btn) => btn.addEventListener('click', async () => {
-    const target = $(btn.dataset.copy);
+    const target = btn.dataset.copy ? $(btn.dataset.copy) : null;
     if (!target) return;
     try {
       await navigator.clipboard.writeText(target.textContent);
@@ -1167,6 +1299,19 @@
     } catch { /* older daemons have no pubaddr action */ }
   }
 
+  // The daemon reports its own beacon locator; keep it so a later reconnect
+  // can find the host without the operator typing anything.
+  function rememberBeaconFromServer() {
+    const b = state.pubaddr && state.pubaddr.beacon;
+    if (!b || !b.enabled || !b.locator) return;
+    if (state.conn && state.conn.beacon === b.locator) return;
+    state.conn = Object.assign({}, state.conn, { beacon: b.locator });
+    $('#conn-beacon').value = b.locator;
+    if ($('#conn-remember').checked) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state.conn));
+    }
+  }
+
   function updateBadge(status) {
     const text = String(status || '');
     let cls = 'off';
@@ -1204,6 +1349,17 @@
       `<span class="chip">last DNS update ${updateBadge(st.updateStatus)}</span>`
     ];
     $('#pubaddr-summary').innerHTML = chips.join('');
+
+    const b = st.beacon || {};
+    const beaconEl = $('#pubaddr-beacon');
+    if (beaconEl) {
+      beaconEl.innerHTML = b.enabled && b.locator
+        ? `<div class="beacon-row"><span class="muted">beacon</span> <code>${escape(b.locator)}</code>` +
+          `<button type="button" class="ghost copy-btn" data-copy-text="${escape(b.locator)}">Copy</button>` +
+          `<span class="muted">${escape(b.provider || '')} · last publish ${b.lastPublish ? ago(b.lastPublish) : 'never'} · ${escape(b.status || '')}</span></div>` +
+          `<div class="muted" style="margin-top:4px;font-size:11px;">Keep this URL: the dashboard reads it to find this host after its address changes.</div>`
+        : '<span class="muted">beacon disabled — set beacon.enabled in the config to publish this host\'s address</span>';
+    }
 
     const rows = st.history || [];
     $('#pubaddr-history tbody').innerHTML = rows.length

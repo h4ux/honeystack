@@ -235,57 +235,62 @@ What each setting costs is documented in
 [README.md](./README.md#what-it-stores-where-and-for-how-long), including
 sizing profiles for 512 MB / 1 GB / 4 GB hosts.
 
-## 2f. A hostname that survives an IP change
+## 2f. Finding the box after its IP changes
 
-The installer offers two options, neither of which needs an account:
+The installer turns on a **beacon**: the daemon publishes `{ip, port}` to a
+URL that never changes, and the dashboard follows it. No account, nothing
+to register.
 
-- **`sslip.io` (default)** — the name encodes the address
-  (`62-228-88-158.sslip.io`), so it resolves immediately with nothing
-  registered and no credential stored. The name changes when the address
-  does; the current one is always in the banner, in
-  `systemctl status honeypot-go` and in the dashboard.
-- **`xyz.frl`** — a stable random name, minted anonymously at install and
-  stored in `/opt/honeystack/data/dyndns.json` (0600). See the caveat
-  below.
-
-DuckDNS and No-IP are supported too, but both require signing up for a
-token first (DuckDNS uses OAuth), so the installer cannot create one for
-you — set `dyndns.provider` and drop the token into the credentials file
-afterwards.
-
-Either way the daemon refreshes every 5 minutes and records every address
-change.
-
-Where to see the address:
+The locator is printed by the installer, in the startup banner, and by:
 
 ```bash
-systemctl status honeypot-go      # the Status: line carries the URL and current IP
-journalctl -u honeypot-go | grep pubaddr
-curl -s "http://127.0.0.1:9090/v1/pubaddr?token=$(sudo cat /opt/honeystack/data/auth.key)" | jq
+systemctl status honeypot-go            # Status: line
+journalctl -u honeypot-go | grep beacon
+sudo cat /opt/honeystack/data/beacon.json
 ```
 
-and in the dashboard under **Stats → Public address**, with the full change
-log.
+It looks like:
 
-To add or change it later, write the credentials file and enable the block:
+```
+https://ntfy.sh/honeystack-c56fcbe…/json?poll=1#b8f4adfcf870…
+```
+
+Paste that into the dashboard's **Beacon** field once. From then on, when
+the host's address changes the dashboard reads the beacon and reconnects on
+its own. Keep the whole string including the `#…` part — that is the key it
+uses to verify the document is really from your daemon.
+
+To check it by hand:
 
 ```bash
-sudo tee /opt/honeystack/data/dyndns.json >/dev/null <<'EOF'
-{"hostname": "example.duckdns.org", "username": "", "password": "<token>"}
-EOF
+curl -s "https://ntfy.sh/<topic>/json?poll=1" | tail -1 | jq -r .message
+```
+
+To turn it off: `beacon.enabled: false` in `config.json`.
+
+**DNS instead/as well.** If you own a domain, point a record at the box with
+a Cloudflare token:
+
+```bash
+echo '{"token":"<cloudflare-api-token>"}' | sudo tee /opt/honeystack/data/dyndns.json
 sudo chmod 600 /opt/honeystack/data/dyndns.json
 sudo chown honeypot:honeypot /opt/honeystack/data/dyndns.json
-# then set dyndns.enabled true (and provider, e.g. "duckdns") in config.json
+# in config.json:  "dyndns": {"enabled": true, "provider": "cloudflare",
+#                             "hostname": "hp.example.com", "zone": "example.com"}
 sudo systemctl restart honeypot-go
 ```
 
-If the hostname does not resolve, check what the provider answered — the
-Public address panel and `/v1/pubaddr` show the last update result
-(`ok`, `rate-limited`, `unauthorized`, or the error). Note that xyz.frl
-accepted updates but was not publishing records when this was written; IP
-tracking and the change log work regardless of provider.
+Token scope: Zone → DNS → Edit, limited to that zone. The daemon creates
+the A record if it is missing and keeps it at TTL 60.
 
-## 3. Reconnect on the new SSH port
+Free anonymous DNS is not a real option — see the note in
+[README.md](./README.md#dns-optional) for what was tested and why.
+
+**After a restart the auth key rotates.** The beacon gets the dashboard to
+the right address; the key comes from
+`sudo cat /opt/honeystack/data/auth.key`.
+
+## 3. Reconnect on the new SSH port## 3. Reconnect on the new SSH port
 
 ```bash
 ssh -p 1980 ubuntu@your-server

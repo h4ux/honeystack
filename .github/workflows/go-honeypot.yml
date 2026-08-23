@@ -50,9 +50,9 @@ jobs:
           - goos: windows
             goarch: arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26.7"
           cache-dependency-path: ${{ env.GO_MODULE_DIR }}/go.sum
@@ -75,7 +75,7 @@ jobs:
           ls -lh "${GITHUB_WORKSPACE}/dist/${out}"
 
       - name: Upload per-target artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: honeypot-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/honeypot-${{ matrix.goos }}-${{ matrix.goarch }}*
@@ -87,7 +87,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: honeypot-*
           path: dist
@@ -102,7 +102,7 @@ jobs:
           ls -lh
 
       - name: Upload combined artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: honeypot-binaries
           path: dist/
@@ -117,9 +117,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: honeypot-binaries
           path: dist

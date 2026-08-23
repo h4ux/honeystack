@@ -49,6 +49,14 @@ are no versioned releases yet: `main` is published continuously as the
   updates (HTTP 202) but its hostnames did not resolve when this was
   written — tracking and the change log do not depend on that.
 
+### Changed
+
+- `update-server.sh` now refreshes `config.default.json` alongside the
+  binary (with a backup) and prints a config review. Without it, a box
+  installed before a release kept reading stale defaults, so new listeners,
+  new resource limits and the beacon never appeared. `--skip-defaults`
+  keeps the old behaviour.
+
 ### Documentation
 
 - New [`docs/`](./docs) folder: [architecture.md](./docs/architecture.md)

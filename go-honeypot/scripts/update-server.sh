@@ -45,6 +45,7 @@ CHECK_ONLY=0
 FORCE=0
 ROLLBACK=0
 KEEP=3
+SKIP_DEFAULTS=0
 
 if [[ -t 1 ]]; then
   C_B=$'\033[1;34m'; C_G=$'\033[1;32m'; C_Y=$'\033[1;33m'; C_R=$'\033[1;31m'; C_D=$'\033[2m'; C_0=$'\033[0m'
@@ -69,6 +70,7 @@ while [[ $# -gt 0 ]]; do
     --service)  SERVICE_NAME="${2:?}"; shift 2 ;;
     --path)     BIN_PATH="${2:?}"; shift 2 ;;
     --keep)     KEEP="${2:?}"; shift 2 ;;
+    --skip-defaults) SKIP_DEFAULTS=1; shift ;;
     -h|--help)  sed -n '2,40p' "$0" | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
@@ -300,6 +302,92 @@ chmod 0755 "$tmp/$ASSET"
 NEW_LINE="$("$tmp/$ASSET" --version 2>/dev/null | head -n1 || true)"
 note "downloaded: ${NEW_LINE:-<build predates --version>}"
 
+# The daemon reads config.default.json for anything config.json does not
+# override, so a stale defaults file means new settings never appear. It is
+# shipped data, not your configuration — safe to replace, with a backup.
+refresh_defaults() {
+  (( SKIP_DEFAULTS )) && { note "skipping defaults refresh (--skip-defaults)"; return; }
+  local dir defaults
+  dir="$(awk -F'WorkingDirectory=' '/^WorkingDirectory=/{print $2}' "$UNIT_FILE" 2>/dev/null | head -n1)"
+  [[ -n "$dir" ]] || dir="$(dirname "$BIN_PATH")"
+  defaults="$(awk -F'--defaults ' '/^ExecStart=/{print $2}' "$UNIT_FILE" 2>/dev/null | awk '{print $1}' | head -n1)"
+  [[ -n "$defaults" ]] || defaults="${dir}/config.default.json"
+  [[ -f "$defaults" ]] || { note "no defaults file at ${defaults}; skipping"; return; }
+
+  local url="https://raw.githubusercontent.com/${REPO}/main/go-honeypot/server/config.default.json"
+  if ! curl -fsSL --show-error -m 20 -o "$tmp/config.default.json" "$url"; then
+    warn "could not fetch new defaults; keeping ${defaults}"
+    return
+  fi
+  if cmp -s "$tmp/config.default.json" "$defaults"; then
+    note "defaults already current"
+    return
+  fi
+  cp -a "$defaults" "${defaults}.bak-$(date +%Y%m%d-%H%M%S)"
+  install -m 0644 "$tmp/config.default.json" "$defaults"
+  ok "refreshed $(basename "$defaults") (previous kept as .bak-*)"
+  DEFAULTS_PATH="$defaults"
+}
+
+# Show which of your overrides now differ from the shipped defaults, and
+# which new settings you will inherit. Read-only: nothing is changed.
+review_config() {
+  local user_cfg="${1:-}"
+  [[ -n "$user_cfg" && -f "$user_cfg" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  [[ -f "$tmp/config.default.json" ]] || return 0
+  python3 - "$user_cfg" "$tmp/config.default.json" <<'PY'
+import json, sys
+
+def flatten(obj, prefix=""):
+    out = {}
+    for k, v in (obj or {}).items():
+        key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict) and k != "services":
+            out.update(flatten(v, key))
+        else:
+            out[key] = v
+    return out
+
+try:
+    user = flatten(json.load(open(sys.argv[1])))
+    shipped = flatten(json.load(open(sys.argv[2])))
+except Exception as e:
+    print(f"    (could not compare configs: {e})")
+    raise SystemExit
+
+def interesting(k):
+    # The services map is huge and per-listener; summarise it separately.
+    return k != "services" and not k.startswith("services.")
+
+new_keys = [k for k in shipped if k not in user and interesting(k)]
+differing = [(k, user[k], shipped[k]) for k in user
+             if k in shipped and user[k] != shipped[k] and interesting(k)]
+
+def brief(v, limit=60):
+    text = json.dumps(v)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+if new_keys:
+    print("    new settings inherited from the defaults:")
+    for k in sorted(new_keys):
+        print(f"      {k} = {brief(shipped[k])}")
+if differing:
+    print("    your config.json pins these (shipped default in brackets):")
+    for k, mine, theirs in sorted(differing):
+        print(f"      {k} = {brief(mine)}   [{brief(theirs)}]")
+
+mine_svcs = set((json.load(open(sys.argv[1])).get("services") or {}).keys())
+their_svcs = set((json.load(open(sys.argv[2])).get("services") or {}).keys())
+added = sorted(their_svcs - mine_svcs)
+if added:
+    print(f"    {len(added)} listeners come from the defaults (not in your config): "
+          + ", ".join(added[:8]) + ("…" if len(added) > 8 else ""))
+if not new_keys and not differing and not added:
+    print("    your config matches the shipped defaults")
+PY
+}
+
 BACKUP="${BIN_PATH}.bak-$(date +%Y%m%d-%H%M%S)"
 cp -a "$BIN_PATH" "$BACKUP"
 ok "backup: $BACKUP"
@@ -316,6 +404,15 @@ if command -v setcap >/dev/null 2>&1; then
   setcap 'cap_net_bind_service=+ep' "$BIN_PATH" 2>/dev/null || true
 fi
 ok "installed $(installed_line)"
+
+refresh_defaults
+USER_CFG="$(awk -F'--config ' '/^ExecStart=/{print $2}' "$UNIT_FILE" 2>/dev/null | awk '{print $1}' | head -n1)"
+if [[ -n "$USER_CFG" && -f "$USER_CFG" ]]; then
+  echo
+  note "config review (${USER_CFG}):"
+  review_config "$USER_CFG"
+  echo
+fi
 
 if (( WAS_ACTIVE )) || ask "Start ${SERVICE_NAME} now?" y; then
   systemctl start "${SERVICE_NAME}.service" || warn "start failed"

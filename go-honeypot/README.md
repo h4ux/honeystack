@@ -457,7 +457,15 @@ curl -fsSL --show-error https://raw.githubusercontent.com/h4ux/honeystack/main/g
 `update-server.sh` finds the install from the `honeypot-go` systemd unit,
 verifies the download against the release `SHA256SUMS`, keeps the last
 three binaries as `honeypot.bak-<timestamp>`, and restores the previous
-one if the new build fails to come up. Restarting rotates the auth key,
+one if the new build fails to come up.
+
+It also refreshes `config.default.json` (backing up the old one). That
+file is shipped data, not your configuration: anything your `config.json`
+does not set is read from it, so a stale copy means new settings — new
+listeners, new limits, the beacon — never take effect. Your `config.json`
+is never touched, and the script prints a short review afterwards showing
+which new settings you inherit and which of your overrides now differ from
+the shipped defaults. `--skip-defaults` opts out. Restarting rotates the auth key,
 so reconnect the dashboard with the key from
 `<install-dir>/data/auth.key`.
 

@@ -8,6 +8,11 @@ scripts. Most new work happens in the Go tree.
 Before anything else: please read [SECURITY.md](./SECURITY.md) if you
 found a vulnerability, and do **not** open a public issue for it.
 
+Read [docs/architecture.md](./docs/architecture.md) first if you are
+touching the daemon — it covers the package layout, the hot path and the
+locking. [docs/storage.md](./docs/storage.md) covers the file formats and
+their write patterns.
+
 ## Ground rules
 
 - A honeypot must never become a weapon. Emulators may *look* exploitable

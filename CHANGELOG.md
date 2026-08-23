@@ -19,7 +19,23 @@ are no versioned releases yet: `main` is published continuously as the
 - `.github/dependabot.yml` now watches Go modules (with the vendor tree),
   npm and GitHub Actions weekly, and CI runs `govulncheck` on every PR.
 
+### Documentation
+
+- New [`docs/`](./docs) folder: [architecture.md](./docs/architecture.md)
+  (package layout and dependency direction, startup sequence, the
+  probe→event hot path, listener lifecycle, goroutine and lock map, the
+  control API, and the design constraints) and
+  [storage.md](./docs/storage.md) (every file written, the pattern used for
+  each, the NDJSON format with `jq` recipes, in-memory limits, what boot
+  restores, backup/shrink/ship recipes, permissions, and the full list of
+  attacker-influenced bounds).
+
 ### Fixed
+
+- `config.json` is now replaced atomically (temp + rename). The dashboard
+  rewrites it on every config change, so a crash mid-write could leave a
+  truncated file the daemon could not parse on the next boot.
+
 
 - **Unbounded memory growth.** Nothing ever removed rows from the session
   table, and UDP opened a session *per datagram* — an SNMP/NTP sweep grew

@@ -26,6 +26,11 @@ responsive: on phones the tab strip scrolls horizontally, the history
 table becomes stacked cards, and the session list and transcript swap
 places instead of sitting side by side.
 
+> Internals: [docs/architecture.md](../docs/architecture.md) explains the
+> packages, the probe→event path and the goroutine/lock map;
+> [docs/storage.md](../docs/storage.md) documents every file it writes and
+> the pattern used for each.
+
 ## What the dashboard shows
 
 **Live** — the streaming event feed, with a counter strip above it

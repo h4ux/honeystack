@@ -155,7 +155,18 @@ func writeJSON(path string, c Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	// Replace atomically: the dashboard rewrites this file on every config
+	// change, and a crash mid-write would otherwise leave a truncated
+	// config.json that the daemon cannot parse on the next boot.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // Geo returns the geoip block with defaults filled in, so callers never

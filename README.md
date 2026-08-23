@@ -419,6 +419,15 @@ SSH fake-auth modes are the same JSON shape as Node
 
 ---
 
+# Documentation
+
+| Document | Covers |
+|---|---|
+| [docs/architecture.md](./docs/architecture.md) | how the Go daemon is built: packages, startup, the probe→event path, listener lifecycle, goroutines and locks, the control API |
+| [docs/storage.md](./docs/storage.md) | every file it writes, the pattern for each (append-only, temp+rename, write-once), the NDJSON format, limits, and how to back up or ship the data |
+| [go-honeypot/README.md](./go-honeypot/README.md) | per-service reference and every config key |
+| [go-honeypot/INSTRUCTIONS.md](./go-honeypot/INSTRUCTIONS.md) | deploying, updating and operating a server |
+
 # Contributing
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — dev setup, the checks CI runs, and

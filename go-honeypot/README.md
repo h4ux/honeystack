@@ -69,6 +69,16 @@ passwords, commands, requested HTTP paths, and client fingerprints
 (user agents / protocol version strings), plus source countries with
 their unique-IP counts.
 
+### Long payloads
+
+Dropper one-liners run to several kilobytes. Tables clamp them to a single
+line with a size badge and a **view** pill; the live feed clamps to two
+lines. The pill opens the full text in a dialog with the event's service,
+type, source IP, country and timestamp, a wrap toggle and a copy button.
+Cells cannot widen a table any more (`table-layout: fixed`), so one 4 KB
+command no longer pushes the layout past the viewport on desktop or phone.
+CSV and PDF exports still carry the untruncated text.
+
 ### This run vs. everything retained
 
 The event ring is rehydrated from `events.ndjson` on boot, so most

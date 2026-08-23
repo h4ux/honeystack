@@ -444,7 +444,7 @@
       <span class="service">${svcIcon(evt.service, 13)}${escape(evt.service)}</span>
       <span class="type">${escape(evt.type)}</span>
       <span class="ip">${escape(ip)}${port ? ':' + port : ''} ${ip ? geoBadge(evt) : ''}</span>
-      <span class="details">${escape(details.trim())}</span>
+      <span class="details-wrap">${feedDetails(evt, details.trim())}</span>
       <span class="badge">→ :${localPort || ''}</span>
     `;
     if (evt.sessionId) {
@@ -457,6 +457,22 @@
       });
     }
     return div;
+  }
+
+  // A feed row shows at most two lines of payload; the rest goes to the
+  // dialog, so one dropper cannot turn the feed into a wall of text.
+  function feedDetails(evt, text) {
+    if (!text) return '';
+    if (text.length <= FEED_CLAMP && !/[\r\n]/.test(text)) {
+      return `<span class="details">${escape(text)}</span>`;
+    }
+    const id = registerPayload('feed:' + (evt.id || evt.ts + ':' + (evt.sessionId || '')), text, {
+      title: 'Live event payload',
+      service: evt.service, type: evt.type, ip: evt.remoteIp, ts: evt.ts,
+      country: (geoOf(evt) || {}).countryCode
+    });
+    return `<span class="details clamped">${escape(text.slice(0, FEED_CLAMP))}…</span>` +
+      `<button type="button" class="cmd-more" data-payload="${escape(id)}">view</button>`;
   }
 
   // ---- Sessions ----
@@ -973,7 +989,9 @@
     }
   }));
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') $('#update-overlay').hidden = true;
+    if (e.key !== 'Escape') return;
+    if (!$('#payload-overlay').hidden) { $('#payload-overlay').hidden = true; return; }
+    $('#update-overlay').hidden = true;
   });
 
   // ---- Stats ----
@@ -1083,12 +1101,26 @@
     ], true);
     tableRows('#stats-services', s.byService, (r) => [serviceCell(r.key), num(r.count)], true);
     $('#geo-status').textContent = geoStatusText();
-    tableRows('#stats-creds', s.topCreds, (r) => [r.username || '—', r.password || '—', num(r.count)]);
-    tableRows('#stats-commands', s.topCommands, (r) => [r.key, num(r.count)]);
-    tableRows('#stats-users', s.topUsernames, (r) => [r.key, num(r.count)]);
-    tableRows('#stats-passwords', s.topPasswords, (r) => [r.key, num(r.count)]);
-    tableRows('#stats-paths', s.topPaths, (r) => [r.key, num(r.count)]);
-    tableRows('#stats-clients', s.topClients, (r) => [r.key, num(r.count)]);
+    tableRows('#stats-creds', s.topCreds, (r, i) => [
+      cmdCell(r.username, { key: 'cu:' + i, clamp: 40, meta: { title: 'Username' } }) || '—',
+      cmdCell(r.password, { key: 'cp:' + i, clamp: 40, meta: { title: 'Password' } }) || '—',
+      num(r.count)
+    ], true);
+    tableRows('#stats-commands', s.topCommands, (r, i) => [
+      cmdCell(r.key, { key: 'cmd:' + i, meta: { title: 'Captured command' } }), num(r.count)
+    ], true);
+    tableRows('#stats-users', s.topUsernames, (r, i) => [
+      cmdCell(r.key, { key: 'u:' + i, clamp: 46, meta: { title: 'Username' } }), num(r.count)
+    ], true);
+    tableRows('#stats-passwords', s.topPasswords, (r, i) => [
+      cmdCell(r.key, { key: 'pw:' + i, clamp: 46, meta: { title: 'Password' } }), num(r.count)
+    ], true);
+    tableRows('#stats-paths', s.topPaths, (r, i) => [
+      cmdCell(r.key, { key: 'path:' + i, meta: { title: 'Requested path' } }), num(r.count)
+    ], true);
+    tableRows('#stats-clients', s.topClients, (r, i) => [
+      cmdCell(r.key, { key: 'client:' + i, meta: { title: 'Client fingerprint' } }), num(r.count)
+    ], true);
 
     const svcRows = s.serviceStats || [];
     $('#stats-service-table tbody').innerHTML = svcRows.map((r) => `
@@ -1192,7 +1224,7 @@
     if (!table) return;
     const list = rows || [];
     const body = table.querySelector('tbody');
-    body.innerHTML = list.map((r) => '<tr>' + map(r).map((cell) =>
+    body.innerHTML = list.map((r, i) => '<tr>' + map(r, i).map((cell) =>
       `<td>${raw ? cell : escape(String(cell))}</td>`).join('') + '</tr>').join('');
     const holder = table.parentElement;
     if (holder && holder.parentElement && holder.parentElement.classList.contains('two-col')) {
@@ -1201,6 +1233,108 @@
   }
 
   function num(v) { return Number(v || 0).toLocaleString(); }
+
+  // ---- Long payloads ----
+  // Dropper one-liners run to several KB. Cells show a clamped preview and
+  // park the full text here, keyed so a re-render reuses the same slot
+  // instead of growing the map forever.
+  const PAYLOAD_CLAMP = 130;   // characters kept inline in a table cell
+  const FEED_CLAMP = 220;      // characters kept inline in a live-feed row
+  const payloads = new Map();
+  let payloadSeq = 0;
+
+  function registerPayload(key, text, meta) {
+    const id = key || 'p' + (++payloadSeq);
+    payloads.set(id, { text: String(text == null ? '' : text), meta: meta || {} });
+    // Bound the map: rows scroll out of the feed but their entries linger.
+    if (payloads.size > 4000) {
+      let drop = 2000;
+      for (const k of payloads.keys()) {
+        payloads.delete(k);
+        if (--drop <= 0) break;
+      }
+    }
+    return id;
+  }
+
+  function byteLen(text) {
+    try { return new TextEncoder().encode(text).length; } catch { return text.length; }
+  }
+
+  function sizeLabel(text) {
+    const n = byteLen(text);
+    return n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
+  }
+
+  // One table cell: clamped text plus a "view" pill when there is more.
+  function cmdCell(text, opts) {
+    const o = opts || {};
+    const full = String(text == null ? '' : text);
+    if (!full) return '';
+    const oneLine = full.replace(/\s+/g, ' ').trim();
+    const long = oneLine.length > (o.clamp || PAYLOAD_CLAMP) || /[\r\n]/.test(full);
+    if (!long) return `<span class="cmd-text" title="${escape(oneLine)}">${escape(oneLine)}</span>`;
+    const id = registerPayload(o.key, full, o.meta);
+    const preview = oneLine.slice(0, o.clamp || PAYLOAD_CLAMP);
+    return `<span class="cmd-cell">` +
+      `<span class="cmd-text">${escape(preview)}…</span>` +
+      `<span class="cmd-bytes">${escape(sizeLabel(full))}</span>` +
+      `<button type="button" class="cmd-more" data-payload="${escape(id)}">view</button>` +
+      `</span>`;
+  }
+
+  function openPayload(id) {
+    const entry = payloads.get(id);
+    if (!entry) return;
+    const meta = entry.meta || {};
+    $('#payload-title').textContent = meta.title || 'Captured payload';
+    const bits = [
+      meta.service, meta.type,
+      meta.ip ? (meta.country ? `${meta.ip} (${meta.country})` : meta.ip) : '',
+      meta.ts ? new Date(meta.ts).toLocaleString() : '',
+      sizeLabel(entry.text),
+      entry.text.split('\n').length > 1 ? entry.text.split('\n').length + ' lines' : ''
+    ].filter(Boolean);
+    $('#payload-meta').textContent = bits.join(' · ');
+    $('#payload-body').textContent = entry.text;
+    $('#payload-body').classList.toggle('nowrap', !$('#payload-wrap').checked);
+    $('#payload-body').scrollTop = 0;
+    $('#payload-overlay').hidden = false;
+  }
+
+  // One delegated listener covers every table and the feed. It runs in the
+  // capture phase because feed rows and history rows carry their own click
+  // handler (open the session transcript) on an element the event reaches
+  // first — bubbling here would fire both.
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest ? e.target.closest('.cmd-more') : null;
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openPayload(btn.dataset.payload);
+  }, true);
+  $('#payload-close').addEventListener('click', () => { $('#payload-overlay').hidden = true; });
+  $('#payload-overlay').addEventListener('click', (e) => {
+    if (e.target === $('#payload-overlay')) $('#payload-overlay').hidden = true;
+  });
+  $('#payload-wrap').addEventListener('change', () => {
+    $('#payload-body').classList.toggle('nowrap', !$('#payload-wrap').checked);
+  });
+  $('#payload-copy').addEventListener('click', async () => {
+    const btn = $('#payload-copy');
+    try {
+      await navigator.clipboard.writeText($('#payload-body').textContent);
+      const old = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = old; }, 1200);
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents($('#payload-body'));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
 
   // Compact, human duration: 0s, 42s, 3m 07s, 5h 12m, 3d 4h.
   function durationMs(ms) {
@@ -1416,7 +1550,14 @@
         <td data-label="Country">${e.remoteIp ? geoBadge(e) + ' ' + escape(geoLabel(e).replace(/^\S+\s*/, '')) : ''}</td>
         <td data-label="User">${escape(e.username || '')}</td>
         <td data-label="Password">${escape(e.password || '')}</td>
-        <td data-label="Detail">${escape(detailText(e))}</td>
+        <td data-label="Detail">${cmdCell(detailText(e), {
+          key: 'hist:' + (e.id || e.ts + ':' + (e.sessionId || '')),
+          clamp: 150,
+          meta: {
+            title: 'Event detail', service: e.service, type: e.type,
+            ip: e.remoteIp, ts: e.ts, country: (geoOf(e) || {}).countryCode
+          }
+        })}</td>
       `;
       if (e.sessionId) {
         tr.style.cursor = 'pointer';

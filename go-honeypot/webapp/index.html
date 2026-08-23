@@ -261,6 +261,23 @@
     </section>
   </main>
 
+  <!-- FULL PAYLOAD DIALOG -->
+  <div id="payload-overlay" class="overlay" hidden>
+    <div class="connect-card payload-card">
+      <div class="payload-head">
+        <h1 id="payload-title">Captured command</h1>
+        <span id="payload-meta" class="muted"></span>
+      </div>
+      <pre id="payload-body" class="payload-body"></pre>
+      <div class="row payload-actions">
+        <label class="checkbox"><input id="payload-wrap" type="checkbox" checked> wrap lines</label>
+        <span class="spacer"></span>
+        <button id="payload-copy" class="ghost">Copy</button>
+        <button id="payload-close" class="primary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- BUILD / UPDATE DIALOG -->
   <div id="update-overlay" class="overlay" hidden>
     <div class="connect-card update-card">

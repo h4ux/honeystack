@@ -45,6 +45,12 @@ are no versioned releases yet: `main` is published continuously as the
   [`scripts/update-server.sh`](./go-honeypot/scripts/update-server.sh)
   updates in place with checksum verification, backups and automatic
   rollback (`--check`, `--force`, `--rollback`, `--yes`).
+- **Long payloads no longer break the layout**: multi-KB attacker
+  one-liners are clamped to one line in tables (two in the live feed) with
+  a size badge and a `view` pill that opens the full text in a dialog
+  (wrap toggle, copy button, and the event's service/type/IP/country/time).
+  Ranking tables use `table-layout: fixed`, so no single token can widen a
+  column past the viewport. Exports keep the full text.
 - **Run-scoped timing in Stats**: a live-ticking "uptime this run" tile,
   a "first hit after start" tile (how long the host sat untouched, which
   listener was hit, and how many hits the run has seen), and two new

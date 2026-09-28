@@ -16,7 +16,7 @@
   "dependencies": {
     "better-sqlite3": "^12.11.1",
     "express": "^5.2.1",
-    "socket.io": "^4.7.5",
+    "socket.io": "^4.8.4",
     "ssh2": "^1.15.0"
   }
 }
